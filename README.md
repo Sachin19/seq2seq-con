@@ -1,2 +1,1 @@
-# seq2seq-con
-Sequence to Sequence Model with Continuous Outputs
+This repo contains the code for the paper: Machine Translation with Continuous Outputs
