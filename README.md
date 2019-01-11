@@ -70,7 +70,7 @@ title={Von Mises-Fisher Loss for Training Sequence to Sequence Models with Conti
 author={Sachin Kumar and Yulia Tsvetkov},
 booktitle={Proc. of ICLR},
 year={2019},
-url={https://openreview.net/forum?id=rJlDnoA5Y7},
+url={https://arxiv.org/pdf/1812.04616.pdf},
 }
 ```
 
