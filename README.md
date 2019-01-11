@@ -1,6 +1,6 @@
 This repository contains the code for the paper
 
-> von-Mises Fisher Loss for Training Sequence to Sequence Models with Continuouos Outputs. _Sachin Kumar_ and _Yulia Tsvetkov_
+> [Von Mises-Fisher Loss for Training Sequence to Sequence Models with Continuous Outputs](https://arxiv.org/pdf/1812.04616.pdf) _Sachin Kumar_ and _Yulia Tsvetkov_
 
 # Dependencies
 
@@ -65,10 +65,10 @@ Pretrained models for the 4 pairs will soon be available as well
 If you use this code, please cite the following paper
 
 ```
-@inproceedings{kumar2018von,
+@inproceedings{kumar2018vmf,
 title={Von Mises-Fisher Loss for Training Sequence to Sequence Models with Continuous Outputs},
 author={Sachin Kumar and Yulia Tsvetkov},
-booktitle={International Conference on Learning Representations},
+booktitle={Proc. of ICLR},
 year={2019},
 url={https://openreview.net/forum?id=rJlDnoA5Y7},
 }
