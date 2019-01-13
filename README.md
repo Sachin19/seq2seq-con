@@ -54,11 +54,11 @@ evaluate.sh can be used to computer BLEU score. It first detruecases and then de
 
 ## Data
 
-Already preprocessed versions of the training, val and test data can be found here.
+Already preprocessed versions of the training, val and test data for the language pairs reported in the paper can be found [here](https://drive.google.com/file/d/1jau37sNH3axLXNndmzFAcXFoR_k4Ujhw/view?usp=sharing).
 
 ## Pretrained Models
 
-Pretrained models for the 4 pairs will soon be available as well
+Pretrained models for the mentioned language pairs will soon be available as well
 
 ## Publications
 
