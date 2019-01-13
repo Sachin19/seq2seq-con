@@ -55,7 +55,7 @@ Already preprocessed versions of the training, val and test data for the languag
 
 ## Pretrained Models
 
-Pretrained models for the mentioned language pairs will soon be available as well
+Pretrained models for the mentioned language pairs will soon be available.
 
 ## Publications
 
