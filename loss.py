@@ -38,8 +38,8 @@ def NLLvMF(outputs, targets, target_embeddings, generator, opt, eval=False):
 
         lambda2 = 0.1
         lambda1 = 0.02
-        nll_loss = - logcmk(kappa) + kappa*(lambda2-lambda1*(out_vec_norm_t*tar_vec_norm_t).sum(dim=-1))
-        # nll_loss = - logcmk(kappa) + torch.log(1+kappa)*(0.2-(out_vec_norm_t*tar_vec_norm_t).sum(dim=-1))
+        # nll_loss = - logcmk(kappa) + kappa*(lambda2-lambda1*(out_vec_norm_t*tar_vec_norm_t).sum(dim=-1))
+        nll_loss = - logcmk(kappa) + torch.log(1+kappa)*(0.2-(out_vec_norm_t*tar_vec_norm_t).sum(dim=-1))
         # nll_loss = logcmkappox(opt.output_emb_size, kappa) + torch.log(1+kappa)*(0.2-(out_vec_norm_t*tar_vec_norm_t).sum(dim=-1))
 
         loss_t = nll_loss.masked_select(targ_t.view(-1).ne(onmt.Constants.PAD)).sum()

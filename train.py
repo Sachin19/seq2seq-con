@@ -143,7 +143,7 @@ def NMTCriterion(vocabSize):
         crit.cuda()
     return crit
 
-def eval(model, loss_fn, criterion, target_embeddings, data, original_embeddings=None):
+def eval(model, loss_fn, target_embeddings, data):
     total_loss = 0
     total_words = 0
     total_other_loss = 0
@@ -155,7 +155,7 @@ def eval(model, loss_fn, criterion, target_embeddings, data, original_embeddings
         outputs = model(batch)
         targets = batch[1][1:]  # exclude <s> from targets
         loss, _, other_loss = loss_fn(
-                outputs, targets, target_embeddings, model.generator, criterion, eval=True)
+                outputs, targets, target_embeddings, model.generator, opt, eval=True)
         total_loss += loss
         total_other_loss += other_loss
         total_words += targets.data.ne(onmt.Constants.PAD).float().sum()
@@ -164,26 +164,28 @@ def eval(model, loss_fn, criterion, target_embeddings, data, original_embeddings
     return total_loss / total_words, total_other_loss / total_words
 
 
-def trainModel(model, trainData, validData, dataset, target_embeddings, optim, original_embeddings=None):
+def trainModel(model, trainData, validData, dataset, target_embeddings, optim):
+
     print(model)
     sys.stdout.flush()
     model.train()
 
     # define criterion of each GPU
+    if opt.loss == "baseline":
+        loss_fn = CrossEntropy
     if opt.loss == "cosine":
         loss_fn = CosineLoss
     elif opt.loss == "l2":
         loss_fn = L2Loss
-    elif opt.loss == "normalized_l2":
-        loss_fn = NormalizedL2Loss
     elif opt.loss == 'nllvmf':
-        loss_fn = NLLvMFLoss
+        loss_fn = NLLvMF
     elif opt.loss == "maxmargin":
         loss_fn = MaxMarginLoss
     else:
         raise ValueError("loss function:%s is not supported"%opt.loss)
 
     start_time = time.time()
+
     def trainEpoch(epoch):
 
         if opt.extra_shuffle and epoch > opt.curriculum:
@@ -192,8 +194,8 @@ def trainModel(model, trainData, validData, dataset, target_embeddings, optim, o
         # shuffle mini batch order
         batchOrder = torch.randperm(len(trainData))
 
-        total_loss, total_words, total_num_correct = 0, 0, 0
-        report_loss, report_tgt_words, report_src_words, report_num_correct = 0, 0, 0, 0
+        total_loss, total_words, total_other_loss = 0, 0, 0
+        report_loss, report_tgt_words, report_src_words, report_other_loss = 0, 0, 0, 0
         report_samples = 0
         total_samples = 0
         start = time.time()
@@ -207,8 +209,8 @@ def trainModel(model, trainData, validData, dataset, target_embeddings, optim, o
             # print batch
             outputs = model(batch)
             targets = batch[1][1:]  # exclude <s> from targets
-            loss, gradOutput, num_correct = loss_fn(
-                    outputs, targets, target_embeddings, model.generator, criterion, False)
+            loss, gradOutput, other_loss = loss_fn(
+                    outputs, targets, target_embeddings, model.generator, opt, False)
 
             outputs.backward(gradOutput)
 
@@ -216,32 +218,33 @@ def trainModel(model, trainData, validData, dataset, target_embeddings, optim, o
             optim.step()
             num_words = targets.data.ne(onmt.Constants.PAD).float().sum()
             report_loss += loss
-            report_num_correct += num_correct
+            report_other_loss += other_loss
             report_tgt_words += num_words
             report_src_words += sum(batch[0][1])
             report_samples += targets.size(1)*1.0
             total_samples += targets.size(1)*1.0
             total_loss += loss
-            total_num_correct += num_correct
+            total_other_loss += other_loss
             total_words += num_words
+
             if i % opt.log_interval == -1 % opt.log_interval:
                 print("Epoch %2d, %5d/%5d; lps: %.5f; mse_lps: %.5f; %3.0f src tok/s; %3.0f tgt tok/s; %3.0f sample/s; %6.0f s elapsed" %
                       (epoch, i+1, len(trainData),
                       report_loss / report_tgt_words,
-                      report_num_correct / report_tgt_words,
+                      report_other_loss / report_tgt_words,
                       report_src_words/(time.time()-start),
                       report_tgt_words/(time.time()-start),
                       report_samples/(time.time()-start),
                       time.time()-start_time))
 
                 sys.stdout.flush()
-                report_loss = report_tgt_words = report_src_words = report_num_correct = report_samples = 0
+                report_loss = report_tgt_words = report_src_words = report_other_loss = report_samples = 0
                 start = time.time()
 
         print ("Epoch %2d, %6.0f samples, %6.0f s" % (epoch, total_samples, time.time()-start_time))
-        return total_loss / total_words, total_num_correct / total_words
+        return total_loss / total_words, total_other_loss / total_words
 
-    valid_loss, other_loss = eval(model, loss_fn, criterion, target_embeddings, validData)
+    valid_loss, other_loss = eval(model, loss_fn, target_embeddings, validData)
     best_valid_lps = valid_loss
     best_other_loss = other_loss
     print('Validation per step loss: %g' % best_valid_lps)
@@ -257,7 +260,7 @@ def trainModel(model, trainData, validData, dataset, target_embeddings, optim, o
         # print('Train accuracy: %g' % (train_acc*100))
 
         #  (2) evaluate on the validation set
-        valid_loss, other_loss = eval(model, loss_fn, criterion, target_embeddings, validData, original_embeddings)
+        valid_loss, other_loss = eval(model, loss_fn, target_embeddings, validData)
         valid_lps = valid_loss
         print('Validation per step loss: %g' % valid_loss)
         print('Validation per step other loss: %g' % (other_loss))
@@ -303,7 +306,8 @@ def main():
     print("Loading data from '%s'" % opt.data)
     dataset = torch.load(opt.data)
 
-    dict_checkpoint = opt.train_from if opt.train_from else opt.train_from_state_dict
+    dict_checkpoint = opt.train_from if opt.train_from else None
+
     if dict_checkpoint:
         print('Loading dicts from checkpoint at %s' % dict_checkpoint)
         checkpoint = torch.load(dict_checkpoint)
@@ -329,16 +333,19 @@ def main():
 
     output_dim = opt.output_emb_size
 
-    if not opt.nonlin_gen: #add a non-linear layer before generating the continuous vector
+    if not opt.nonlin_gen:
         generator = nn.Sequential(nn.Linear(opt.rnn_size, output_dim))
-    else:
+    else: #add a non-linear layer before generating the continuous vector
         generator = nn.Sequential(nn.Linear(opt.rnn_size, output_dim), nn.ReLU(), nn.Linear(output_dim, output_dim))
 
     #output is just an embedding
     target_embeddings = nn.Embedding(dicts['tgt'].size(), opt.output_emb_size)
+
+    #normalize the embeddings
     norm = dicts['tgt'].embeddings.norm(p=2, dim=1, keepdim=True).clamp(min=1e-12)
     target_embeddings.weight.data.copy_(dicts['tgt'].embeddings.div(norm))
 
+    #target embeddings are fixed and not trained
     target_embeddings.weight.requires_grad=False
     # elif opt.loss != "maxmargin": # with max-margin loss, the target embeddings can be fine-tuned as well.
         # target_embeddings.weight.requires_grad=False
@@ -347,24 +354,16 @@ def main():
 
     if opt.train_from:
         print('Loading model from checkpoint at %s' % opt.train_from)
-        # chk_model = checkpoint['model']
         generator_state_dict = checkpoint['generator']
-        # model_state_dict = {k: v for k, v in chk_model.state_dict().items() if 'generator' not in k}
         encoder_state_dict = [('encoder.'+k,v) for k, v in checkpoint['encoder'].items()]
         decoder_state_dict = [('decoder.'+k,v) for k, v in checkpoint['decoder'].items()]
         model_state_dict = dict(encoder_state_dict+decoder_state_dict)
 
         model.load_state_dict(model_state_dict)
         generator.load_state_dict(generator_state_dict)
-ret
-        if not opt.train_anew:
-            opt.start_epoch = checkpoint['epoch'] + 1
 
-    if opt.train_from_state_dict:
-        print('Loading model from checkpoint at %s' % opt.train_from_state_dict)
-        model.load_state_dict(checkpoint['model'])
-        generator.load_state_dict(checkpoint['generator'])
-        opt.start_epoch = checkpoint['epoch'] + 1
+        if not opt.train_anew: #load from
+            opt.start_epoch = checkpoint['epoch'] + 1
 
     if len(opt.gpus) >= 1:
         model.cuda()
@@ -381,7 +380,7 @@ ret
 
     model.generator = generator
 
-    if not opt.train_from_state_dict and not opt.train_from:
+    if not opt.train_from:
         for p in model.parameters():
             p.data.uniform_(-opt.param_init, opt.param_init)
 
@@ -392,24 +391,25 @@ ret
             decoder.tie_embeddings(target_embeddings)
 
         if opt.fix_src_emb:
+            #fix and normalize the source embeddings
             source_embeddings = nn.Embedding(dicts['src'].size(), opt.output_emb_size)
             norm = dicts['src'].embeddings.norm(p=2, dim=1, keepdim=True).clamp(min=1e-12)
             source_embeddings.weight.data.copy_(dicts['src'].embeddings.div(norm))
+
+            #turn this off to initialize embeddings as well as make them trainable
             source_embeddings.weight.requires_grad=False
             if len(opt.gpus) >= 1:
                 source_embeddings.cuda()
             else:
                 source_embeddings.cpu()
             encoder.fix_embeddings(source_embeddings)
-            # print (model.encoder.word_lut.requires_grad)
-            # raw_input("Here")
 
         optim = onmt.Optim(
             opt.optim, opt.learning_rate, opt.max_grad_norm,
             lr_decay=opt.learning_rate_decay,
             start_decay_at=opt.start_decay_at
         )
-    elif opt.train_anew:
+    elif opt.train_anew: #restart optimizer, sometimes useful for training with
         optim = onmt.Optim(
             opt.optim, opt.learning_rate, opt.max_grad_norm,
             lr_decay=opt.learning_rate_decay,
@@ -420,17 +420,15 @@ ret
         optim = checkpoint['optim']
         print(optim)
 
-    # print list(model.parameters())
-    # raw_input()
     optim.set_parameters(model.parameters())
 
-    if (opt.train_from or opt.train_from_state_dict) and not opt.train_anew:
+    if opt.train_from and not opt.train_anew:
         optim.optimizer.load_state_dict(checkpoint['optim'].optimizer.state_dict())
 
     nParams = sum([p.nelement() for p in model.parameters() if p.requires_grad])
     print('* number of trainable parameters: %d' % nParams)
 
-    trainModel(model, trainData, validData, dataset, target_embeddings)
+    trainModel(model, trainData, validData, dataset, target_embeddings, optim)
 
 if __name__ == "__main__":
     main()

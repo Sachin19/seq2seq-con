@@ -16,33 +16,28 @@ parser.add_argument('-src',   required=True,
 parser.add_argument('-tgt',
                     help='True target sequence (optional)')
 parser.add_argument('-tgt_dict',
-                    help='Target Embeddings (optional)')
+                    help='Target Embeddings (optional). This is usually for cases when you want to evaluate using a larger embedding table than the one used for training. It should the same format as the target embedding which is part of the training data')
 parser.add_argument('-lookup_dict',
-                    help='File for dictionary lookup (optional)')
+                    help='File for dictionary lookup (optional). This is just a python dictionary you can use to look up source word translations when you produce and u<unk>')
 parser.add_argument('-output', default='pred.txt',
                     help="""Path to output the predictions (each line will
                     be the decoded sequence""")
 parser.add_argument('-loss', default='cosine',
-                    help="""loss function: [mse|cosine|maxmargin|nll]""")
-parser.add_argument('-png_filename',
-                    help='True target sequence (optional)')
+                    help="""loss function: [l2|cosine|maxmargin|nllvmf]""")
 parser.add_argument('-beam_size',  type=int, default=5,
-                    help='Beam size')
+                    help='Beam size') #recommended beam size for embedding outputs is 1
 
 parser.add_argument('-batch_size', type=int, default=30,
                     help='Batch size')
 parser.add_argument('-max_sent_length', type=int, default=100,
-                    help='Maximum sentence length.')
+                    help='Maximum output sentence length.')
 parser.add_argument('-replace_unk', action="store_true",
                     help="""Replace the generated UNK tokens with the source
-                    token that had the highest attention weight. If phrase_table
+                    token that had the highest attention weight. If lookup_dict
                     is provided, it will lookup the identified source token and
                     give the corresponding target token. If it is not provided
                     (or the identified source token does not exist in the
                     table) then it will copy the source token""")
-# parser.add_argument('-phrase_table',
-#                     help="""Path to source-target dictionary to replace UNK
-#                     tokens. See README.md for the format of this file.""")
 parser.add_argument('-verbose', action="store_true",
                     help='Print scores and predictions for each sentence')
 parser.add_argument('-use_lm', action="store_true",
@@ -54,9 +49,6 @@ parser.add_argument('-saved_lm', default="",
                     help="""Address of the saved LM""")
 parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
-
-
-
 
 def reportScore(name, scoreTotal, wordsTotal):
     print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
@@ -74,10 +66,10 @@ def main():
     print(opt)
     if opt.cuda:
         torch.cuda.set_device(opt.gpu)
-    translator = onmt.EmbBeamTranslator(opt)
+    translator = onmt.Translator(opt)
     outF = codecs.open(opt.output, 'w', 'utf-8')
 
-    predScoreTotal, predWordsTotal, goldScoreTotal, goldWordsTotal = 0, 0, 0, 0
+    predScoreTotal, predWordsTotal= 0, 0
 
     srcBatch, tgtBatch = [], []
 
@@ -105,16 +97,16 @@ def main():
                 break
 
         start_time = time.time()
-        predBatch, predScore, goldScore, knntime_ = translator.translate(srcBatch, tgtBatch)
+        predBatch, predScore, knntime_ = translator.translate(srcBatch, tgtBatch)
         total_time += (time.time()-start_time)
         knntime += knntime_
         nsamples += len(predBatch)
 
         predScoreTotal += sum(score[0] for score in predScore)
         predWordsTotal += sum(len(x[0]) for x in predBatch)
-        if tgtF is not None:
-            goldScoreTotal += sum(goldScore)
-            goldWordsTotal += sum(len(x) for x in tgtBatch)
+        # if tgtF is not None:
+        #     goldScoreTotal += sum(goldScore)
+        #     goldWordsTotal += sum(len(x) for x in tgtBatch)
 
         for b in range(len(predBatch)):
             count += 1
@@ -134,7 +126,7 @@ def main():
                     if translator.tgt_dict.lower:
                         tgtSent = tgtSent.lower()
                     print('GOLD %d: %s ' % (count, tgtSent))
-                    print("GOLD SCORE: %.4f" % goldScore[b])
+                    # print("GOLD SCORE: %.4f" % goldScore[b])
 
                 if opt.n_best > 1:
                     print('\nBEST HYP:')
@@ -145,9 +137,9 @@ def main():
 
         srcBatch, tgtBatch = [], []
 
-    reportScore('PRED', predScoreTotal, count)
-    if tgtF:
-        reportScore('GOLD', goldScoreTotal, goldWordsTotal)
+    # reportScore('PRED', predScoreTotal, count)
+    # if tgtF:
+    #     reportScore('GOLD', goldScoreTotal, goldWordsTotal)
 
     if tgtF:
         tgtF.close()
