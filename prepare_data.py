@@ -96,11 +96,11 @@ def makeVocabulary(filename, size, embGiven=False, embFile=None):
     originalSize = vocab.size()
     vocab, c = vocab.prune(size, embGiven)
     if embGiven:
-        print (c, size)
-        print (len(vocab.idxToLabel), len(vocab.embeddings))
-        print (max(vocab.embeddings.keys()))
+        # print (c, size)
+        # print (len(vocab.idxToLabel), len(vocab.embeddings))
+        # print (max(vocab.embeddings.keys()))
         vocab.average_unk(onmt.Constants.UNK_WORD, n-c, opt.normalize)
-        vocab.convert_embeddings_to_torch()
+        vocab.convert_embeddings_to_torch(dim=opt.emb_dim)
     print('Created dictionary of size %d (pruned from %d)' %
           (vocab.size(), originalSize))
 
@@ -144,7 +144,7 @@ def initVocabulary(name, dataFile, vocabFile, vocabSize):
 
         vocab = genWordVocab
 
-    print()
+    # print()
     return vocab
 
 
