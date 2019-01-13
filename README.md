@@ -29,7 +29,7 @@ This repository contains the code for the paper
 * Create preprocessed data objects for easily loading while training
 
 ```
-python scripts/prepare_data.py -train_src /path/to/processed/train/file.fr -train_tgt /path/to/processed/train/file.en \
+python prepare_data.py -train_src /path/to/processed/train/file.fr -train_tgt /path/to/processed/train/file.en \
 -valid_src /path/to/processed/valid/file.fr -valid_tgt /path/to/processed/valid/file.en -save_data /path/to/save/data.pt \
 -src_vocab_size 50000 -tgt_vocab_size 50000 -tgt_emb /path/to/target/embeddings/file -emb_dim 300 -normalize
 ```
@@ -46,19 +46,16 @@ python translate.py -loss nllvmf -gpu 0 -model /path/to/save/model -src /path/to
 ```
 
 ## Evaluation
-evaluate.sh can be used to computer BLEU score. It first detruecases and then detokenizes the output file and computes BLEU score using mult-bleu-detok.perl
-```
-./evaluate.sh /path/to/predictions /path/to/target/file language_code
-#language code can be something like en,fr
-```
+
+Please follow evaluate.sh to compute BLEU score. It first detruecases and then detokenizes the output file and computes BLEU score using mult-bleu-detok.perl
 
 ## Data
 
-Already preprocessed versions of the training, val and test data for the language pairs reported in the paper can be found [here](https://drive.google.com/file/d/1jau37sNH3axLXNndmzFAcXFoR_k4Ujhw/view?usp=sharing). Pretrained fasttext vectors: [English](https://drive.google.com/file/d/1LdzxlIx3D3MyZOKYnsX8mgOJv_qaOhfO/view?usp=sharing) and [French](). English vectors were trained using monolingual corpus from WMT 2016  and WMT 2014/15 for French (except common crawl).
+Already preprocessed versions of the training, val and test data for the language pairs reported in the paper can be found [here](https://drive.google.com/file/d/1jau37sNH3axLXNndmzFAcXFoR_k4Ujhw/view?usp=sharing). Pretrained fasttext vectors: [English](https://drive.google.com/file/d/1LdzxlIx3D3MyZOKYnsX8mgOJv_qaOhfO/view?usp=sharing) and [French](https://drive.google.com/open?id=1G2sKGOmy8728pOnadMf6VjGkusOy6Tle). English vectors were trained using monolingual corpus from WMT 2016  and WMT 2014/15 for French (except common crawl).
 
 ## Pretrained Models
 
-Pretrained models for the mentioned language pairs will soon be available as well
+Pretrained models for the mentioned language pairs will soon be available.
 
 ## Publications
 
@@ -76,5 +73,7 @@ url={https://arxiv.org/pdf/1812.04616.pdf},
 
 ## Acknowledgements
 
-This code base has been adapted from [open-NMT](https://github.com/OpenNMT/OpenNMT-py) toolkit
+This code base has been adapted from [open-NMT](https://github.com/OpenNMT/OpenNMT-py) toolkit.
+
+scripts/compare_mt.py has been taken from [here](https://github.com/neulab/compare-mt)
 
