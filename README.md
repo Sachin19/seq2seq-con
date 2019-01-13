@@ -29,9 +29,9 @@ This repository contains the code for the paper
 * Create preprocessed data objects for easily loading while training
 
 ```
-python prepare_data.py -train_src /path/to/processed/train/file.fr -train_tgt /path/to/processed/train/file.en \
+python scripts/prepare_data.py -train_src /path/to/processed/train/file.fr -train_tgt /path/to/processed/train/file.en \
 -valid_src /path/to/processed/valid/file.fr -valid_tgt /path/to/processed/valid/file.en -save_data /path/to/save/data.pt \
--src_vocab_size 50000 -tgt_vocab_size 50000 -tgt_emb /path/to/target/embeddings/file -emb_dim 300 
+-src_vocab_size 50000 -tgt_vocab_size 50000 -tgt_emb /path/to/target/embeddings/file -emb_dim 300 -normalize
 ```
 ## Training 
 
@@ -54,11 +54,11 @@ evaluate.sh can be used to computer BLEU score. It first detruecases and then de
 
 ## Data
 
-Already preprocessed versions of the training, val and test data can be found here.
+Already preprocessed versions of the training, val and test data for the language pairs reported in the paper can be found [here](https://drive.google.com/file/d/1jau37sNH3axLXNndmzFAcXFoR_k4Ujhw/view?usp=sharing). Pretrained fasttext vectors: [English](https://drive.google.com/file/d/1LdzxlIx3D3MyZOKYnsX8mgOJv_qaOhfO/view?usp=sharing) and [French](). English vectors were trained using monolingual corpus from WMT 2016  and WMT 2014/15 for French (except common crawl).
 
 ## Pretrained Models
 
-Pretrained models for the 4 pairs will soon be available as well
+Pretrained models for the mentioned language pairs will soon be available as well
 
 ## Publications
 
