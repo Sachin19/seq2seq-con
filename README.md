@@ -73,6 +73,7 @@ url={https://arxiv.org/pdf/1812.04616.pdf},
 
 ## Acknowledgements
 
-This code base has been adapted from [open-NMT](https://github.com/OpenNMT/OpenNMT-py) toolkit
+This code base has been adapted from [open-NMT](https://github.com/OpenNMT/OpenNMT-py) toolkit.
+
 scripts/compare_mt.py has been taken from [here](https://github.com/neulab/compare-mt)
 
