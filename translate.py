@@ -24,7 +24,7 @@ parser.add_argument('-output', default='pred.txt',
                     be the decoded sequence""")
 parser.add_argument('-loss', default='cosine',
                     help="""loss function: [l2|cosine|maxmargin|nllvmf]""")
-parser.add_argument('-beam_size',  type=int, default=5,
+parser.add_argument('-beam_size',  type=int, default=1,
                     help='Beam size') #recommended beam size for embedding outputs is 1
 
 parser.add_argument('-batch_size', type=int, default=30,
