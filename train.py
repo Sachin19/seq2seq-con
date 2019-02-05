@@ -289,14 +289,14 @@ def trainModel(model, trainData, validData, dataset, target_embeddings, optim):
         if opt.save_all_epochs:
           torch.save(checkpoint,'%s_model_%d.pt' % (opt.save_model,epoch))
 
-        if best_other_loss > other_loss:
+        if best_valid_lps > valid_lps:
             best_valid_lps = valid_lps
             best_other_loss = other_loss
             print ("Best model found!")
             torch.save(checkpoint,
                    '%s_bestmodel.pt' % opt.save_model)
         elif best_valid_lps == valid_lps: #in case of vMF loss, if the loss is the same, has the cosine loss decreased?
-            if best_other_loss < other_loss:
+            if best_other_loss > other_loss:
                 best_other_loss = other_loss
                 print ("Best model found!")
                 torch.save(checkpoint, '%s_bestmodel.pt' % opt.save_model)
