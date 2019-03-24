@@ -109,7 +109,7 @@ class Beam(object):
         return self.done()
 
     def done(self):
-        self._eos_top and (len(self.finished) >= 1)
+        return self._eos_top and (len(self.finished) >= 1)
 
     def sortBest(self):
         if len(self.finished) < 1:
