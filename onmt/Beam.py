@@ -28,7 +28,7 @@ class Beam(object):
         self.scores = self.tt.FloatTensor(size).zero_()
         self.all_scores = []
 
-        # The backpointers at each time-step.
+        # The backpointers to the beam number at each time-step.
         self.prevKs = []
 
         # The outputs at each time-step.
@@ -61,13 +61,13 @@ class Beam(object):
     #     * `attnOut`- attention at the last step
     #
     # Returns: True if beam search is complete.
-    def advance(self, wordLk, attnOut):
+    def advance(self, wordLk, attnOut, srcLen=100):
 
         numWords = wordLk.size(1)
 
         # Sum the previous scores.
         if len(self.prevKs) > 0:
-            beamLk = wordLk + self.scores.unsqueeze(1).expand_as(wordLk)
+            beamLk = wordLk + self.scores.unsqueeze(1)#.expand_as(wordLk)
             # Don't let EOS have children.
             for i in range(self.nextYs[-1].size(0)):
                 if self.nextYs[-1][i] == self._eos:
@@ -85,7 +85,7 @@ class Beam(object):
         bestScores, bestScoresId = flatBeamLk.topk(self.size, 0, True, True)
 
         self.all_scores.append(self.scores)
-        self.scores = bestScores
+        self.scores = bestScores 
 
         # bestScoresId is flattened beam x word array, so calculate which
         # word and beam each score came from
@@ -95,12 +95,17 @@ class Beam(object):
         self.nextYs.append(bestScoresId - prevK * numWords)
         self.attn.append(attnOut.index_select(0, prevK))
 
-        normalized_scores = self.scores/len(self.nextYs)
+        #length normalize the scores
+        length_penalty = len(self.nextYs)
+        alpha = 1
+        length_penalty = (5+length_penalty/6)**alpha
+        normalized_scores = self.scores/length_penalty
+
         for i in range(self.nextYs[-1].size(0)):
             # print (i, len(self.nextYs[-1]))
             if self.nextYs[-1][i] == self._eos:
                 s = normalized_scores[i]
-                self.finished.append((s, len(self.nextYs)-1, i))
+                self.finished.append((s, len(self.nextYs)-1, i)) #score, index in nextY, beam_index
 
         # End condition is when top-of-beam is EOS.
         if self.nextYs[-1][0] == onmt.Constants.EOS:
@@ -109,12 +114,12 @@ class Beam(object):
         return self.done()
 
     def done(self):
-        return self._eos_top and (len(self.finished) >= 1)
+        return self._eos_top and (len(self.finished) >= self.size) # have to change this later
 
     def sortBest(self):
         if len(self.finished) < 1:
             i=0
-            normalized_scores = self.scores/len(self.nextYs)
+            normalized_scores = self.scores/(len(self.nextYs))
             s = normalized_scores[i]
             self.finished.append((s, len(self.nextYs)-1, i))
 
