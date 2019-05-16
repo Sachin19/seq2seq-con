@@ -79,5 +79,5 @@ scripts/compare_mt.py has been taken from [here](https://github.com/neulab/compa
 
 ## License 
 
-This code is freely available for free non-commercial use, and may be redistributed under these conditions. Please, see the [license](https://github.com/Sachin19/seq2seq-con/blob/master/LICENSE) for further details. Interested in a commercial license? Please contact the authors
+This code is freely available for non-commercial use, and may be redistributed under these conditions. Please, see the [license](https://github.com/Sachin19/seq2seq-con/blob/master/LICENSE) for further details. Interested in a commercial license? Please contact the authors
 
