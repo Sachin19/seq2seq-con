@@ -77,3 +77,7 @@ This code base has been adapted from [open-NMT](https://github.com/OpenNMT/OpenN
 
 scripts/compare_mt.py has been taken from [here](https://github.com/neulab/compare-mt)
 
+## License 
+
+This code is freely available for free non-commercial use, and may be redistributed under these conditions. Please, see the license for further details. Interested in a commercial license? Please contact the authors
+
