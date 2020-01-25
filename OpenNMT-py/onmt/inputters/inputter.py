@@ -183,7 +183,7 @@ def get_fields(
         word_align = AlignField()
         fields["align"] = word_align
 
-    print(fields)
+    # print(fields)
     return fields
 
 
@@ -338,9 +338,9 @@ def _build_field_vocab_old(field, counter, size_multiple=1, **kwargs):
     if size_multiple > 1:
         _pad_vocab_to_multiple(field.vocab, size_multiple)
 
-def _build_field_vocab(field, counter, size_multiple=1, emb_file=None, **kwargs):
+def _build_field_vocab(field, counter, size_multiple=1, emb_file=None, base_field=None, fv_counter=None, **kwargs):
     # this is basically copy-pasted from torchtext.
-    print(field)
+    # print(field)
     all_specials = [
         field.pad_token, 
         field.unk_token, 
@@ -400,7 +400,7 @@ def _build_field_vocab(field, counter, size_multiple=1, emb_file=None, **kwargs)
             word_vectors.append(word2emb[tok])
             stoi[tok] = i
         
-        print(word2emb["</s>"])
+        # print(word2emb["</s>"])
         for word, vec in word2emb.items():
             if word not in field.vocab.stoi:
                 word_vectors[field.vocab.stoi[field.unk_token]] += vec #add all the remaining words which weren't added to the vocabulary to UNK vector
@@ -408,11 +408,25 @@ def _build_field_vocab(field, counter, size_multiple=1, emb_file=None, **kwargs)
         temp = word_vectors[field.vocab.stoi[field.unk_token]] / unk_count # average
         word_vectors[field.vocab.stoi[field.unk_token]] = temp / (np.linalg.norm(temp) + eps) #normalize
         word_vectors = torch.Tensor(np.stack(word_vectors, axis=0))
-        field.vocab.set_vectors(stoi, word_vectors, dim=300)  
-        print(field.vocab.itos[:4])
-        print(field.vocab.vectors[:4])
+        field.vocab.set_vectors(stoi, word_vectors, dim=word_vectors.size(1))  
+        # print(field.vocab.itos[:4])
+        # print(field.vocab.vectors[:4])
     else:
         field.vocab = field.vocab_cls(counter, specials=specials, **kwargs)
+    
+    if fv_counter is not None:
+        f2v = torch.zeros(len(base_field.vocab), len(field.vocab))
+        f2v[base_field.vocab.stoi[base_field.init_token]][field.vocab.stoi[base_field.init_token]] = 1.
+        f2v[base_field.vocab.stoi[base_field.pad_token]][field.vocab.stoi[base_field.pad_token]] = 1.
+        f2v[base_field.vocab.stoi[base_field.eos_token]][field.vocab.stoi[base_field.eos_token]] = 1.
+        f2v[base_field.vocab.stoi[base_field.unk_token]] = 1.
+        for key, value in fv_counter.items():
+            #key = pos, value = vocab dictionary
+            for word in value.keys():
+                if word in base_field.vocab.stoi:
+                    f2v[base_field.vocab.stoi[word]][field.vocab.stoi[key]] = 1.
+        
+        field.vocab2pos = f2v
 
     if size_multiple > 1:
         _pad_vocab_to_multiple(field.vocab, size_multiple)
@@ -431,14 +445,23 @@ def _load_vocab(vocab_path, name, counters, min_freq):
 
 
 def _build_fv_from_multifield(multifield, counters, build_fv_args,
-                              size_multiple=1, emb_file=None):
-    for name, field in multifield:
+                              size_multiple=1, emb_file=[None], feat_vocab_counters=[]):
+    # print(emb_file)
+    i = 0
+    base_field = 0
+    feat_vocab_counters = [None] + feat_vocab_counters
+    for (name, field), emb_f, fv_counter in zip(multifield, emb_file, feat_vocab_counters):
         _build_field_vocab(
             field,
             counters[name],
-            emb_file=emb_file,
+            emb_file=emb_f,
+            base_field=base_field,    
+            fv_counter=fv_counter,
             size_multiple=size_multiple,
             **build_fv_args[name])
+        if i == 0:
+            base_field = field
+        i += 1
         logger.info(" * %s vocab size: %d." % (name, len(field.vocab)))
 
 
@@ -446,7 +469,7 @@ def _build_fields_vocab(fields, counters, data_type, share_vocab,
                         vocab_size_multiple,
                         src_vocab_size, src_words_min_frequency,
                         tgt_vocab_size, tgt_words_min_frequency,
-                        emb_file=None):
+                        emb_file=[None], feat_vocab_counters=[]):
     build_fv_args = defaultdict(dict)
     build_fv_args["src"] = dict(
         max_size=src_vocab_size, min_freq=src_words_min_frequency)
@@ -458,7 +481,8 @@ def _build_fields_vocab(fields, counters, data_type, share_vocab,
         counters,
         build_fv_args,
         size_multiple=vocab_size_multiple if not share_vocab else 1,
-        emb_file=emb_file)
+        emb_file=emb_file,
+        feat_vocab_counters=feat_vocab_counters)
     if data_type == 'text':
         src_multifield = fields["src"]
         _build_fv_from_multifield(
@@ -564,8 +588,6 @@ def build_vocab(train_dataset_files, fields, data_type, share_vocab,
             del dataset
             gc.collect()
 
-    print(counters)
-    input("hello")
     fields = _build_fields_vocab(
         fields, counters, data_type,
         share_vocab, vocab_size_multiple,

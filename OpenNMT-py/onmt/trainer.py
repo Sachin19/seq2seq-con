@@ -312,6 +312,7 @@ class Trainer(object):
                 src, src_lengths = batch.src if isinstance(batch.src, tuple) \
                                    else (batch.src, None)
                 tgt = batch.tgt
+                tgt = tgt[:, :, :1]
 
                 # F-prop through the model.
                 outputs, attns = valid_model(src, tgt, src_lengths,
@@ -355,7 +356,7 @@ class Trainer(object):
             bptt = False
             for j in range(0, target_size-1, trunc_size):
                 # 1. Create truncated target.
-                tgt = tgt_outer[j: j + trunc_size]
+                tgt = tgt_outer[j: j + trunc_size, :, :1]
 
                 # 2. F-prop all but generator.
                 if self.accum_count == 1:

@@ -38,11 +38,15 @@ def build_embeddings(opt, text_field, for_encoder=True):
                      else opt.dropout),
         )
 
-    pad_indices = [f.vocab.stoi[f.pad_token] for _, f in text_field]
-    word_padding_idx, feat_pad_indices = pad_indices[0], pad_indices[1:]
+    if opt.use_feat_emb:
+        num_embs = [len(f.vocab) for _, f in text_field]
+        pad_indices = [f.vocab.stoi[f.pad_token] for _, f in text_field]
+    else:
+        num_embs = [len(f.vocab) for _, f in text_field][:1]
+        pad_indices = [f.vocab.stoi[f.pad_token] for _, f in text_field][:1]
 
-    num_embs = [len(f.vocab) for _, f in text_field]
-    num_word_embeddings, num_feat_embeddings = num_embs[0], num_embs[1:]
+    num_word_embeddings, num_feat_embeddings = num_embs[0], num_embs[1:]  
+    word_padding_idx, feat_pad_indices = pad_indices[0], pad_indices[1:]  
 
     fix_word_vecs = opt.fix_word_vecs_enc if for_encoder \
         else opt.fix_word_vecs_dec
@@ -96,6 +100,65 @@ def build_decoder(opt, embeddings):
     return str2dec[dec_type].from_opt(opt, embeddings)
 
 
+def build_generator(opt, fields, output_vec_dim=-1):
+    # Build Generator.
+    if not opt.copy_attn:
+        if opt.generator_function == 'continuous-linear':
+            generator_modules = [nn.Linear(opt.dec_rnn_size, output_vec_dim)]
+            if opt.generator_layer_norm:
+                generator_modules.append(nn.LayerNorm(output_vec_dim, eps=1e-6))
+            generator = nn.Sequential(*generator_modules)
+        elif opt.generator_function == 'continuous-nonlinear': #add a non-linear layer before generating the continuous vector
+            generator_modules = [nn.Linear(opt.dec_rnn_size, output_vec_dim), 
+                                    nn.ReLU(), 
+                                    nn.Linear(output_vec_dim, output_vec_dim)]
+            if opt.generator_layer_norm:
+                generator_modules.append(nn.LayerNorm(output_vec_dim, eps=1e-6))
+            generator = nn.Sequential(*generator_modules)
+        else:
+            if opt.generator_function == "sparsemax":
+                gen_func = onmt.modules.sparse_activations.LogSparsemax(dim=-1)
+            else:
+                gen_func = nn.LogSoftmax(dim=-1)
+            generator = nn.Sequential(
+                nn.Linear(opt.dec_rnn_size,
+                        len(["tgt"].base_field.vocab)),
+                Cast(torch.float32),
+                gen_func
+            )
+            if opt.share_decoder_embeddings:
+                generator[0].weight = decoder.embeddings.word_lut.weight
+    else:
+        tgt_base_field = fields["tgt"].base_field
+        vocab_size = len(tgt_base_field.vocab)
+        pad_idx = tgt_base_field.vocab.stoi[tgt_base_field.pad_token]
+        generator = CopyGenerator(opt.dec_rnn_size, vocab_size, pad_idx)
+    
+    mtl_generator = None
+    if opt.multi_task:
+        if len(fields["tgt"].fields) > 1:
+            secondary_task_vocab = len(fields["tgt"].fields[1][1].vocab)
+            mtl_generator = nn.Sequential(nn.Linear(opt.dec_rnn_size, secondary_task_vocab),
+                                nn.LogSoftmax(dim=-1))
+        else:
+            logger.info("multitask is set but data doesn't contain multitask labels. Ignoring")
+
+    return generator, mtl_generator
+
+
+# def compare_vocab(v1, v2):
+#     v1 = dict(v1)
+#     v2 = dict(v2)
+#     v1src = v1['src']
+#     v1tgt = v1['tgt']
+
+#     v2src = v2['src']
+#     v2tgt = v2['tgt']
+
+#     print(v1src)
+#     print(v1tgt)
+#     input()
+
 def load_test_model(opt, model_path=None):
     if model_path is None:
         model_path = opt.models[0]
@@ -105,7 +168,15 @@ def load_test_model(opt, model_path=None):
     model_opt = ArgumentParser.ckpt_model_opts(checkpoint['opt'])
     ArgumentParser.update_model_opts(model_opt)
     ArgumentParser.validate_model_opts(model_opt)
-    vocab = checkpoint['vocab']
+    if opt.new_vocab is not None:
+        vocab_old = checkpoint['vocab']
+        vocab = torch.load(opt.new_vocab)
+
+        print(dict(vocab_old)["tgt"].fields[1][1].vocab.itos)
+        print(dict(vocab)["tgt"].fields[1][1].vocab.itos)
+        # compare_vocab(vocab, vocab_old)
+    else:
+        vocab = checkpoint['vocab']
     if inputters.old_style_vocab(vocab):
         fields = inputters.load_old_vocab(
             vocab, opt.data_type, dynamic_dict=model_opt.copy_attn
@@ -169,7 +240,8 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         tgt_emb.word_lut.weight = src_emb.word_lut.weight
 
     decoder = build_decoder(model_opt, tgt_emb)
-    
+
+    output_vec_dim = -1
     if "continuous" in model_opt.generator_function:
         #make target embeddings
         tgt_out_vectors = tgt_field.base_field.vocab.vectors 
@@ -181,6 +253,7 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         tgt_out_emb = nn.Embedding(tgt_out_vectors.size(0), tgt_out_vectors.size(1))
         tgt_out_emb.weight.data.copy_(tgt_out_vectors_unitnorm)
         tgt_out_emb.weight.requires_grad = False # do not train the embeddings
+        output_vec_dim = tgt_out_vectors.size(1)
 
     # Build NMTModel(= encoder + decoder).
     if gpu and gpu_id is not None:
@@ -191,38 +264,8 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         device = torch.device("cpu")
     model = onmt.models.NMTModel(encoder, decoder)
 
-    # Build Generator.
-    if not model_opt.copy_attn:
-        if model_opt.generator_function == 'continuous-linear':
-            generator_modules = [nn.Linear(model_opt.dec_rnn_size, tgt_out_vectors.size(1))]
-            if model_opt.generator_layer_norm:
-                generator_modules.append(nn.LayerNorm(tgt_out_vectors.size(1), eps=1e-6))
-            generator = nn.Sequential(*generator_modules)
-        elif model_opt.generator_function == 'continuous-nonlinear': #add a non-linear layer before generating the continuous vector
-            generator_modules = [nn.Linear(model_opt.dec_rnn_size, tgt_out_vectors.size(1)), 
-                                    nn.ReLU(), 
-                                    nn.Linear(tgt_out_vectors.size(1), tgt_out_vectors.size(1))]
-            if model_opt.generator_layer_norm:
-                generator_modules.append(nn.LayerNorm(tgt_out_vectors.size(1), eps=1e-6))
-            generator = nn.Sequential(*generator_modules)
-        else:
-            if model_opt.generator_function == "sparsemax":
-                gen_func = onmt.modules.sparse_activations.LogSparsemax(dim=-1)
-            else:
-                gen_func = nn.LogSoftmax(dim=-1)
-            generator = nn.Sequential(
-                nn.Linear(model_opt.dec_rnn_size,
-                        len(fields["tgt"].base_field.vocab)),
-                Cast(torch.float32),
-                gen_func
-            )
-            if model_opt.share_decoder_embeddings:
-                generator[0].weight = decoder.embeddings.word_lut.weight
-    else:
-        tgt_base_field = fields["tgt"].base_field
-        vocab_size = len(tgt_base_field.vocab)
-        pad_idx = tgt_base_field.vocab.stoi[tgt_base_field.pad_token]
-        generator = CopyGenerator(model_opt.dec_rnn_size, vocab_size, pad_idx)
+    # Generator
+    generator, mtl_generator = build_generator(model_opt, fields, output_vec_dim=output_vec_dim)
 
     # Load the model states from checkpoint or initialize them.
     if checkpoint is not None:
@@ -240,6 +283,8 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
 
         model.load_state_dict(checkpoint['model'], strict=False)
         generator.load_state_dict(checkpoint['generator'], strict=False)
+        if mtl_generator is not None:
+            mtl_generator.load_state_dict(checkpoint['mtl_generator'], strict=False)
     else:
         if model_opt.param_init != 0.0:
             for p in model.parameters():
@@ -262,6 +307,7 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
                 model_opt.pre_word_vecs_dec)
 
     model.generator = generator
+    model.mtl_generator = mtl_generator
     if "continuous" in model_opt.generator_function:
         model.decoder.tgt_out_emb = tgt_out_emb
         if model_opt.share_decoder_embeddings:

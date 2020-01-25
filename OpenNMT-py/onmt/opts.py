@@ -43,6 +43,8 @@ def model_opts(parser):
                    "Necessary for non-RNN style models.")
 
     group = parser.add_argument_group('Model-Embedding Features')
+    group.add('--use_feat_emb', '-no_feat_emb', action='store_true',
+              help="Do not use feature embeddings, if set. Useful for MTL")
     group.add('--feat_merge', '-feat_merge', type=str, default='concat',
               choices=['concat', 'sum', 'mlp'],
               help="Merge action for incorporating features embeddings. "
@@ -182,6 +184,8 @@ def model_opts(parser):
               choices=['ce', 'nllvmf', 'cosine'],
               help="What loss function to use for training the model (choices:"
                    "cross entropy(ce), nllvmf, cosine")
+    group.add('--approximate_vmf', '-approximate_vmf', action='store_true',
+              help='if true, use the approximation of vmf loss, see Kumar et al (2019) for more details')
     group.add('--lambda_vmf', '-lambda_vmf', default=0.2, type=float,
               help="lambda in the vmf computation. see loss.py")
     group.add('--center', '-center', action="store_true",
@@ -193,6 +197,10 @@ def model_opts(parser):
                    "softmax, sparsemax)")
     group.add('--generator_layer_norm', '-generator_layer_norm', action="store_true",
               help="Apply layer normalization to the predicted vector")
+    group.add('--multi_task', '-multi_task', action="store_true",
+              help="Train with a multi-task objective")
+    group.add('--lambda_mtl', '-lambda_mtl', type=float, default=1.0,
+              help="coefficient for multitask loss")
     group.add('--copy_attn_force', '-copy_attn_force', action="store_true",
               help='When available, train to copy.')
     group.add('--reuse_copy_attn', '-reuse_copy_attn', action="store_true",
@@ -260,6 +268,9 @@ def preprocess_opts(parser):
 
     group.add('--overwrite', '-overwrite', action="store_true",
               help="Overwrite existing shards if any.")
+    
+    group.add('--multi_task', '-multi_task', action="store_true",
+              help="Predict the text and the features in a multitask fashion")
      
     group.add('--tgt_emb', '-tgt_emb',
               help="Path to an existing pretrained target embeddings file")
@@ -611,6 +622,14 @@ def translate_opts(parser):
               help="Path to model .pt file(s). "
                    "Multiple models can be specified, "
                    "for ensemble decoding.")
+    group.add('--new_vocab', '-new_vocab', dest='new_vocab',
+              type=str, default=None,
+              help="Path to a new (optional) vocab .pt file. ")
+    group.add('--multi_task', '-multi_task', action='store_true',
+              help='Use the POS predictions to filter embedding tables')
+    group.add('--usenew', '-usenew', action='store_true',
+              help='Temporary, delete later')
+    group.add('--pos_topk', '-pos_topk', type=int, default=1)
     group.add('--fp32', '-fp32', action='store_true',
               help="Force the model to be in FP32 "
                    "because FP16 is very slow on GTX1080(ti).")

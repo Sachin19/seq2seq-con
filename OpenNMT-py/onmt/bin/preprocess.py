@@ -49,6 +49,7 @@ def process_one_shard(corpus_params, params):
     i, (src_shard, tgt_shard, align_shard, maybe_id, filter_pred) = params
     # create one counter per shard
     sub_sub_counter = defaultdict(Counter)
+    feat_vocab_counter = [defaultdict(Counter) for _ in fields['tgt']] # not used in non-tagged cases
     assert len(src_shard) == len(tgt_shard)
     logger.info("Building shard %d." % i)
 
@@ -85,6 +86,13 @@ def process_one_shard(corpus_params, params):
                             and sub_f.sequential and not has_vocab):
                         val = fd
                         sub_sub_counter[sub_n].update(val)
+            
+            if opt.multi_task and len(fields['tgt'].fields) > 1:  # in case of multitask learning and multiple features, create feat x main_vocab counter
+                all_data = getattr(ex, "tgt")
+                for items in zip(*all_data):
+                    for i, item in enumerate(items[1:]):
+                        feat_vocab_counter[i][item].update(items[:1])
+
     if maybe_id:
         shard_base = corpus_type + "_" + maybe_id
     else:
@@ -102,7 +110,7 @@ def process_one_shard(corpus_params, params):
     del dataset
     gc.collect()
 
-    return sub_sub_counter
+    return sub_sub_counter, feat_vocab_counter
 
 
 def maybe_load_vocab(corpus_type, counters, opt):
@@ -132,6 +140,7 @@ def build_save_dataset(corpus_type, fields, src_reader, tgt_reader,
 
     if corpus_type == 'train':
         counters = defaultdict(Counter)
+        feat_vocab_counters = [defaultdict(Counter) for _ in fields['tgt'].fields]
         srcs = opt.train_src
         tgts = opt.train_tgt
         ids = opt.train_ids
@@ -197,20 +206,30 @@ def build_save_dataset(corpus_type, fields, src_reader, tgt_reader,
                           align_reader, opt, existing_fields,
                           src_vocab, tgt_vocab)
         func = partial(process_one_shard, dataset_params)
-        for sub_counter in p.imap(func, shard_iter):
+        for sub_counter, feat_vocab_sub_counters in p.imap(func, shard_iter):
             if sub_counter is not None:
                 for key, value in sub_counter.items():
                     counters[key].update(value)
+            
+            if corpus_type == "train":
+                for i, feat_vocab_counter in enumerate(feat_vocab_counters):
+                    for key, value in feat_vocab_sub_counters[i].items():
+                        feat_vocab_counter[key].update(value)
+
+                print(feat_vocab_counters[0].keys())
 
     if corpus_type == "train":
         vocab_path = opt.save_data + '.vocab.pt'
         if existing_fields is None:
+            emb_files = [None for _, _ in fields["tgt"]]
+            emb_files[0] = opt.tgt_emb
+            logger.info(emb_files)
             fields = _build_fields_vocab(
                 fields, counters, opt.data_type,
                 opt.share_vocab, opt.vocab_size_multiple,
                 opt.src_vocab_size, opt.src_words_min_frequency,
                 opt.tgt_vocab_size, opt.tgt_words_min_frequency,
-                emb_file=opt.tgt_emb)
+                emb_file=emb_files, feat_vocab_counters=feat_vocab_counters)
         else:
             fields = existing_fields
         torch.save(fields, vocab_path)
@@ -235,7 +254,8 @@ def count_features(path):
     """
     with codecs.open(path, "r", "utf-8") as f:
         first_tok = f.readline().split(None, 1)[0]
-        return len(first_tok.split(u"￨")) - 1
+        logger.info(first_tok)
+        return len(first_tok.split(u"|")) - 1
 
 
 def preprocess(opt):

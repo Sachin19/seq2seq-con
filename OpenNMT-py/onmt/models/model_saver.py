@@ -103,6 +103,10 @@ class ModelSaver(ModelSaverBase):
                             if 'generator' not in k}
         generator_state_dict = model.generator.state_dict()
 
+        mtl_generator_state_dict = None
+        if model.mtl_generator is not None:
+            mtl_generator_state_dict = model.mtl_generator.state_dict()
+
         # NOTE: We need to trim the vocab to remove any unk tokens that
         # were not originally here.
 
@@ -120,6 +124,7 @@ class ModelSaver(ModelSaverBase):
         checkpoint = {
             'model': model_state_dict,
             'generator': generator_state_dict,
+            'mtl_generator': mtl_generator_state_dict,
             'vocab': vocab,
             'opt': self.model_opt,
             'optim': self.optim.state_dict(),
