@@ -132,10 +132,15 @@ class Translator(object):
             logger=None,
             seed=-1,
             decode_loss="cosine",
-            generator_function="softmax"):
+            generator_function="softmax",
+            multi_task=False,
+            pos_topk=1,
+            usenew=False):
         self.model = model
         self.fields = fields
-        tgt_field = dict(self.fields)["tgt"].base_field
+
+        tgt_fields = dict(self.fields)["tgt"]
+        tgt_field = tgt_fields.base_field
         self._tgt_vocab = tgt_field.vocab
         self._tgt_eos_idx = self._tgt_vocab.stoi[tgt_field.eos_token]
         self._tgt_pad_idx = self._tgt_vocab.stoi[tgt_field.pad_token]
@@ -147,6 +152,23 @@ class Translator(object):
         self._use_cuda = gpu > -1
         self._dev = torch.device("cuda", self._gpu) \
             if self._use_cuda else torch.device("cpu")
+        
+        self._sec_tgt_pad_idx = 0
+        self._sec_tgt_vocab = None
+        self.multi_task = multi_task
+        self.vocab2pos = None
+        self._sec_tgt_pad_idx = -1  # isn't used if not multi-task
+        self._sec_tgt_bos_idx = -1  # isn't used if not multi-task
+
+        if len(tgt_fields.fields) > 1 and self.multi_task:
+            sec_tgt_field = tgt_fields.fields[1][1]
+            self._sec_tgt_vocab = sec_tgt_field.vocab
+            self._sec_tgt_pad_idx = self._sec_tgt_vocab.stoi[sec_tgt_field.pad_token]
+            self._sec_tgt_bos_idx = self._sec_tgt_vocab.stoi[sec_tgt_field.init_token]
+            self.vocab2pos = sec_tgt_field.vocab2pos.to(self._dev)
+        elif self.multi_task:   
+            logger.info("multi-task was set but secondary task field doesn't exist in the data, ignoring multi-task")
+            self.multi_task = False
 
         self.n_best = n_best
         self.max_length = max_length
@@ -204,6 +226,9 @@ class Translator(object):
         #used in conmt
         self.decode_loss = decode_loss
         self.generator_function = generator_function
+        self.pos_topk = pos_topk
+
+        self.usenew = usenew
 
     @classmethod
     def from_opt(
@@ -216,7 +241,8 @@ class Translator(object):
             out_file=None,
             report_align=False,
             report_score=True,
-            logger=None):
+            logger=None,
+            vocab2pos=None):
         """Alternate constructor.
 
         Args:
@@ -267,7 +293,10 @@ class Translator(object):
             logger=logger,
             seed=opt.seed,
             decode_loss=opt.decode_loss,
-            generator_function=model_opt.generator_function)
+            generator_function=model_opt.generator_function,
+            multi_task=opt.multi_task,
+            pos_topk=opt.pos_topk,
+            usenew=opt.usenew)
 
     def _log(self, msg):
         if self.logger:
@@ -278,13 +307,16 @@ class Translator(object):
     def _gold_score(self, batch, memory_bank, src_lengths, src_vocabs,
                     use_src_map, enc_states, batch_size, src):
         if "tgt" in batch.__dict__:
-            gs = self._score_target(
+            gs, sec_gs = self._score_target(
                 batch, memory_bank, src_lengths, src_vocabs,
                 batch.src_map if use_src_map else None)
             self.model.decoder.init_state(src, memory_bank, enc_states)
         else:
             gs = [0] * batch_size
-        return gs
+            sec_gs = None
+            if self.multi_task:
+                sec_gs = [0] * batch_size
+        return gs, sec_gs
 
     def translate(
             self,
@@ -340,10 +372,16 @@ class Translator(object):
             shuffle=False
         )
 
-        xlation_builder = onmt.translate.TranslationBuilder(
-            data, self.fields, self.n_best, self.replace_unk, tgt,
-            self.phrase_table
-        )
+        if self.usenew:
+            xlation_builder = onmt.translate.TranslationBuilder2(
+                data, self.fields, self.n_best, self.replace_unk, tgt,
+                self.phrase_table, self.multi_task
+            )
+        else:
+            xlation_builder = onmt.translate.TranslationBuilder(
+                data, self.fields, self.n_best, self.replace_unk, tgt,
+                self.phrase_table, self.multi_task
+            )
 
         # Statistics
         counter = count(1)
@@ -533,7 +571,8 @@ class Translator(object):
                     exclusion_tokens=self._exclusion_idxs,
                     return_attention=attn_debug or self.replace_unk,
                     sampling_temp=self.random_sampling_temp,
-                    keep_topk=self.sample_from_topk)
+                    keep_topk=self.sample_from_topk,
+                    sec_bos=self._sec_tgt_bos_idx, multi_task=self.multi_task)
             else:
                 # TODO: support these blacklisted features
                 assert not self.dump_beam
@@ -578,7 +617,8 @@ class Translator(object):
             memory_lengths,
             src_map=None,
             step=None,
-            batch_offset=None):
+            batch_offset=None,
+            print_=False):
         if self.copy_attn:
             # Turn any copied words into UNKs.
             decoder_in = decoder_in.masked_fill(
@@ -601,8 +641,17 @@ class Translator(object):
                 attn = None
             
             if "continuous" in self.generator_function:
+                if print_:
+                    print(dec_out)
                 pred_emb = self.model.generator(dec_out.squeeze(0))
-                log_probs = self._emb_to_scores(pred_emb, self.model.decoder.tgt_out_emb)
+                pos_log_probs = None
+                if self.multi_task:
+                    if print_:
+                        print(self.model.mtl_generator[0].weight)
+                        input()
+                    pos_log_probs = self.model.mtl_generator(dec_out.squeeze(0))
+                log_probs = self._emb_to_scores(pred_emb, self.model.decoder.tgt_out_emb, pos_log_probs, self.vocab2pos)
+                    
             else:
                 log_probs = self.model.generator(dec_out.squeeze(0))
 
@@ -632,9 +681,22 @@ class Translator(object):
             # returns [(batch_size x beam_size) , vocab ] when 1 step
             # or [ tgt_len, batch_size, vocab ] when full sentence
 
-        return log_probs, attn
+        return (log_probs, pos_log_probs), attn
     
-    def _emb_to_scores(self, pred_emb, tgt_out_emb):
+    def _emb_to_scores(self, pred_emb, tgt_out_emb, pos_log_probs=None, vocab2pos=None):
+        activated_vocab = None
+        if vocab2pos is not None and self.pos_topk > 0:  # filter the vocab based on pos tag predictions
+            _, predicted_pos = pos_log_probs.topk(k=self.pos_topk, dim=-1)
+            # print(predicted_pos.size())
+            #next line creates a zero matrix and fills 1 at the predicted pos tags, because we want to use them now
+            predicted_pos_hot = torch.zeros_like(pos_log_probs).scatter_(dim=-1, index=predicted_pos, value=1.0)# (batch_size x num_pos)
+            # for each word in the vocab, get 1 if the pos tag is predicted for that word, else 0
+            activated_vocab = predicted_pos_hot.matmul(vocab2pos.t()).gt(0.).float() #(batch_size x V) 
+            # print(activated_vocab)
+            # print(predicted_pos)
+            # print(predicted_pos_hot.max(dim=-1)[1] )
+            # input()
+
         if self.decode_loss == "l2": 
             rA = (pred_emb * pred_emb).sum(dim=1)
             rA = rA.unsqueeze(dim=1)
@@ -648,16 +710,20 @@ class Translator(object):
             M = 2 * out.matmul(B.t())
             dists = rA - M
             dists = dists + rB
-            return -dists
+            scores = 100000 - dists  # just to make them positive
 
         elif self.decode_loss == 'nllvmf':
             # norm = out.norm(p=2, dim=-1, keepdim=True)
             norm = torch.log(1 + pred_emb.norm(p=2, dim=-1, keepdim=True))
-            return logcmk(norm) + pred_emb.matmul(tgt_out_emb.weight.t())
+            scores = logcmk(norm) + pred_emb.matmul(tgt_out_emb.weight.t())
 
         else: # cosine and vmf work more or less the same for decoding
             pred_emb_unitnorm = torch.nn.functional.normalize(pred_emb, p=2, dim=-1)
-            return pred_emb_unitnorm.matmul(tgt_out_emb.weight.t())
+            scores = pred_emb_unitnorm.matmul(tgt_out_emb.weight.t())
+        
+        if activated_vocab is not None:
+            return activated_vocab * scores
+        return scores
 
     def _translate_batch_with_strategy(
             self,
@@ -683,28 +749,31 @@ class Translator(object):
         # (1) Run the encoder on the src.
         src, enc_states, memory_bank, src_lengths = self._run_encoder(batch)
         self.model.decoder.init_state(src, memory_bank, enc_states)
-
+        gold_score, sec_gold_score = self._gold_score(
+                batch, memory_bank, src_lengths, src_vocabs, use_src_map,
+                enc_states, batch_size, src)
         results = {
             "predictions": None,
             "scores": None,
             "attention": None,
+            "sec_predictions": None,
             "batch": batch,
-            "gold_score": self._gold_score(
-                batch, memory_bank, src_lengths, src_vocabs, use_src_map,
-                enc_states, batch_size, src)}
+            "gold_score": gold_score,
+            "sec_gold_score": sec_gold_score}
 
         # (2) prep decode_strategy. Possibly repeat src objects.
         src_map = batch.src_map if use_src_map else None
         fn_map_state, memory_bank, memory_lengths, src_map = \
-            decode_strategy.initialize(memory_bank, src_lengths, src_map)
+            decode_strategy.initialize(memory_bank, src_lengths, src_map, pos_topk=self.pos_topk)
         if fn_map_state is not None:
             self.model.decoder.map_state(fn_map_state)
 
         # (3) Begin decoding step by step:
+        # sec_predictions = None
         for step in range(decode_strategy.max_length):
             decoder_input = decode_strategy.current_predictions.view(1, -1, 1)
 
-            log_probs, attn = self._decode_and_generate(
+            (log_probs, sec_log_probs), attn = self._decode_and_generate(
                 decoder_input,
                 memory_bank,
                 batch,
@@ -713,8 +782,8 @@ class Translator(object):
                 src_map=src_map,
                 step=step,
                 batch_offset=decode_strategy.batch_offset)
-
-            decode_strategy.advance(log_probs, attn)
+            
+            decode_strategy.advance(log_probs, attn, sec_log_probs)
             any_finished = decode_strategy.is_finished.any()
             if any_finished:
                 decode_strategy.update_finished()
@@ -739,10 +808,27 @@ class Translator(object):
             if parallel_paths > 1 or any_finished:
                 self.model.decoder.map_state(
                     lambda state, dim: state.index_select(dim, select_indices))
+            
+            # if self.multi_task and sec_log_probs is not None:
+            #     _, sec_predictions_t = sec_log_probs.topk(k=5, dim=-1)
+            #     print(sec_predictions_t.size())
+            #     sec_predictions_t = sec_predictions_t.unsqueeze(1)
+            #     if sec_predictions is not None:
+            #         sec_predictions = torch.cat([sec_predictions, sec_predictions_t], dim=1)
+            #     else:
+            #         sec_predictions = sec_predictions_t
+            #     input()
 
         results["scores"] = decode_strategy.scores
         results["predictions"] = decode_strategy.predictions
         results["attention"] = decode_strategy.attention
+        results['sec_predictions'] = decode_strategy.sec_predictions
+        # decode_strategy.sec_predictions = [[] for _ in range(batch_size)]
+        # if sec_predictions is not None:
+        #     for b in range(batch_size):
+        #         decode_strategy.sec_predictions[b].append(sec_predictions[b])
+
+        # results['sec_predictions'] = decode_strategy.sec_predictions
         if self.report_align:
             results["alignment"] = self._align_forward(
                 batch, decode_strategy.predictions)
@@ -752,19 +838,28 @@ class Translator(object):
 
     def _score_target(self, batch, memory_bank, src_lengths,
                       src_vocabs, src_map):
-        tgt = batch.tgt
+        tgt = batch.tgt[:, :, :1]
         tgt_in = tgt[:-1]
 
-        log_probs, attn = self._decode_and_generate(
+        (log_probs, sec_log_probs), attn = self._decode_and_generate(
             tgt_in, memory_bank, batch, src_vocabs,
-            memory_lengths=src_lengths, src_map=src_map)
+            memory_lengths=src_lengths, src_map=src_map, print_=False)
 
         log_probs[:, :, self._tgt_pad_idx] = 0
         gold = tgt[1:]
         gold_scores = log_probs.gather(2, gold)
         gold_scores = gold_scores.sum(dim=0).view(-1)
 
-        return gold_scores
+        sec_gold_scores = None
+
+        if self.multi_task:
+            sec_tgt = batch.tgt[:, :, 1:]
+            sec_log_probs[:, :, self._sec_tgt_pad_idx] = 0
+            sec_gold = sec_tgt[1:]
+            sec_gold_scores = sec_log_probs.gather(2, sec_gold)
+            sec_gold_scores = sec_gold_scores.sum(dim=0).view(-1)
+
+        return gold_scores, sec_gold_scores
 
     def _report_score(self, name, score_total, words_total):
         if words_total == 0:

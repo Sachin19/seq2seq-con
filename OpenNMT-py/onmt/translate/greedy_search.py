@@ -82,16 +82,16 @@ class GreedySearch(DecodeStrategy):
 
     def __init__(self, pad, bos, eos, batch_size, min_length,
                  block_ngram_repeat, exclusion_tokens, return_attention,
-                 max_length, sampling_temp, keep_topk):
+                 max_length, sampling_temp, keep_topk, sec_bos, multi_task):
         assert block_ngram_repeat == 0
         super(GreedySearch, self).__init__(
             pad, bos, eos, batch_size, 1, min_length, block_ngram_repeat,
-            exclusion_tokens, return_attention, max_length)
+            exclusion_tokens, return_attention, max_length, sec_bos, multi_task)
         self.sampling_temp = sampling_temp
         self.keep_topk = keep_topk
         self.topk_scores = None
 
-    def initialize(self, memory_bank, src_lengths, src_map=None, device=None):
+    def initialize(self, memory_bank, src_lengths, src_map=None, device=None, pos_topk=1):
         """Initialize for decoding."""
         fn_map_state = None
 
@@ -104,7 +104,7 @@ class GreedySearch(DecodeStrategy):
 
         self.memory_lengths = src_lengths
         super(GreedySearch, self).initialize(
-            memory_bank, src_lengths, src_map, device)
+            memory_bank, src_lengths, src_map, device, pos_topk)
         self.select_indices = torch.arange(
             self.batch_size, dtype=torch.long, device=device)
         self.original_batch_idx = torch.arange(
@@ -116,10 +116,14 @@ class GreedySearch(DecodeStrategy):
         return self.alive_seq[:, -1]
 
     @property
+    def current_sec_predictions(self):
+        return self.alive_sec_seq[:, -1]
+
+    @property
     def batch_offset(self):
         return self.select_indices
 
-    def advance(self, log_probs, attn):
+    def advance(self, log_probs, attn, pos_log_probs=None):
         """Select next tokens randomly from the top k possible next tokens.
 
         Args:
@@ -140,6 +144,13 @@ class GreedySearch(DecodeStrategy):
         self.is_finished = topk_ids.eq(self.eos)
 
         self.alive_seq = torch.cat([self.alive_seq, topk_ids], -1)
+
+        #pos
+        if self.multi_task:
+            _, topk_pos_ids = pos_log_probs.topk(self.pos_topk, dim=-1)
+            topk_pos_ids = topk_pos_ids.unsqueeze(1)
+            self.alive_sec_seq = torch.cat([self.alive_sec_seq, topk_pos_ids], 1)
+
         if self.return_attention:
             if self.alive_attn is None:
                 self.alive_attn = attn
@@ -158,11 +169,15 @@ class GreedySearch(DecodeStrategy):
             self.attention[b_orig].append(
                 self.alive_attn[:, b, :self.memory_lengths[b]]
                 if self.alive_attn is not None else [])
+            if self.multi_task:
+                self.sec_predictions[b_orig].append(self.alive_sec_seq[b, 1:])
         self.done = self.is_finished.all()
         if self.done:
             return
         is_alive = ~self.is_finished.view(-1)
         self.alive_seq = self.alive_seq[is_alive]
+        if self.multi_task:
+            self.alive_sec_seq = self.alive_sec_seq[is_alive]
         if self.alive_attn is not None:
             self.alive_attn = self.alive_attn[:, is_alive]
         self.select_indices = is_alive.nonzero().view(-1)

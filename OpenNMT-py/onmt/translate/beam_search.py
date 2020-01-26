@@ -58,7 +58,7 @@ class BeamSearch(DecodeStrategy):
     def __init__(self, beam_size, batch_size, pad, bos, eos, n_best,
                  global_scorer, min_length, max_length, return_attention,
                  block_ngram_repeat, exclusion_tokens,
-                 stepwise_penalty, ratio):
+                 stepwise_penalty, ratio, pos_topk=1):
         super(BeamSearch, self).__init__(
             pad, bos, eos, batch_size, beam_size, min_length,
             block_ngram_repeat, exclusion_tokens, return_attention,
@@ -93,7 +93,10 @@ class BeamSearch(DecodeStrategy):
             not stepwise_penalty and self.global_scorer.has_cov_pen)
         self._cov_pen = self.global_scorer.has_cov_pen
 
-    def initialize(self, memory_bank, src_lengths, src_map=None, device=None):
+        #used with pos prediction
+        self.pos_topk = 1
+
+    def initialize(self, memory_bank, src_lengths, src_map=None, device=None, pos_topk=1):
         """Initialize for decoding.
         Repeat src objects `beam_size` times.
         """
@@ -131,6 +134,7 @@ class BeamSearch(DecodeStrategy):
                                     dtype=torch.long, device=device)
         self._batch_index = torch.empty([self.batch_size, self.beam_size],
                                         dtype=torch.long, device=device)
+        self.pos_topk = pos_topk
         return fn_map_state, memory_bank, self.memory_lengths, src_map
 
     @property
@@ -147,7 +151,7 @@ class BeamSearch(DecodeStrategy):
     def batch_offset(self):
         return self._batch_offset
 
-    def advance(self, log_probs, attn):
+    def advance(self, log_probs, attn, pos_log_probs=None):
         vocab_size = log_probs.size(-1)
 
         # using integer division to get an integer _B without casting

@@ -55,12 +55,16 @@ class DecodeStrategy(object):
 
     def __init__(self, pad, bos, eos, batch_size, parallel_paths,
                  min_length, block_ngram_repeat, exclusion_tokens,
-                 return_attention, max_length):
+                 return_attention, max_length, sec_bos=None, multi_task=False):
 
         # magic indices
         self.pad = pad
         self.bos = bos
         self.eos = eos
+
+        #pos
+        self.sec_bos = sec_bos
+        self.multi_task =  multi_task
 
         self.batch_size = batch_size
         self.parallel_paths = parallel_paths
@@ -68,6 +72,7 @@ class DecodeStrategy(object):
         self.predictions = [[] for _ in range(batch_size)]
         self.scores = [[] for _ in range(batch_size)]
         self.attention = [[] for _ in range(batch_size)]
+        self.sec_predictions = [[] for _ in range(batch_size)]
 
         self.alive_attn = None
 
@@ -83,12 +88,13 @@ class DecodeStrategy(object):
 
         self.done = False
 
-    def initialize(self, memory_bank, src_lengths, src_map=None, device=None):
+    def initialize(self, memory_bank, src_lengths, src_map=None, device=None, pos_topk=1):
         """DecodeStrategy subclasses should override :func:`initialize()`.
 
         `initialize` should be called before all actions.
         used to prepare necessary ingredients for decode.
         """
+        self.pos_topk = pos_topk
         if device is None:
             device = torch.device('cpu')
         self.alive_seq = torch.full(
@@ -97,6 +103,10 @@ class DecodeStrategy(object):
         self.is_finished = torch.zeros(
             [self.batch_size, self.parallel_paths],
             dtype=torch.uint8, device=device)
+        if self.multi_task:
+            self.alive_sec_seq = torch.full(
+                [self.batch_size * self.parallel_paths, 1, pos_topk], self.sec_bos,
+                dtype=torch.long, device=device)
         return None, memory_bank, src_lengths, src_map
 
     def __len__(self):

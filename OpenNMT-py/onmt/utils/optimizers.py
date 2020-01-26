@@ -329,8 +329,8 @@ class Optimizer(object):
         if self._learning_rate_decay_fn is None:
             return self._learning_rate
         scale = self._learning_rate_decay_fn(self._decay_step)
-        if (self._decay_step % 100 == 0):
-            print('scale =',scale)
+        # if (self._decay_step % 100 == 0):
+        #     print('scale =',scale)
         return scale * self._learning_rate
 
     def state_dict(self):
