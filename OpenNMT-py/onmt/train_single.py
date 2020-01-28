@@ -63,6 +63,7 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
 
         if opt.modify_opts:  #modify some of the following opts with new ones
             model_opt.save_checkpoint_steps = opt.save_checkpoint_steps
+            model_opt.train_steps = opt.train_steps
     else:
         checkpoint = None
         model_opt = opt
