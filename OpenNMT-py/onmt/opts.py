@@ -44,7 +44,7 @@ def model_opts(parser):
 
     group = parser.add_argument_group('Model-Embedding Features')
     group.add('--use_feat_emb', '-no_feat_emb', action='store_true',
-              help="Do not use feature embeddings, if set. Useful for MTL")
+              help="Use feature embeddings, if set. Not setting this is useful for MTL with just prediction")
     group.add('--feat_merge', '-feat_merge', type=str, default='concat',
               choices=['concat', 'sum', 'mlp'],
               help="Merge action for incorporating features embeddings. "
@@ -420,6 +420,8 @@ def train_opts(parser):
     group.add('--train_from', '-train_from', default='', type=str,
               help="If training from a checkpoint then this is the "
                    "path to the pretrained model's state_dict.")
+    group.add('--modify_opts', '-modify_opts', action="store_true",
+              help="If train_from is set, modify certain opts in the saved model_opts with the newly provided ones")
     group.add('--reset_optim', '-reset_optim', default='none',
               choices=['none', 'all', 'states', 'keep_states'],
               help="Optimization resetter when train_from.")

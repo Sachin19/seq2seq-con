@@ -60,6 +60,9 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
         ArgumentParser.validate_model_opts(model_opt)
         logger.info('Loading vocab from checkpoint at %s.' % opt.train_from)
         vocab = checkpoint['vocab']
+
+        if opt.modify_opts:  #modify some of the following opts with new ones
+            model_opt.save_checkpoint_steps = opt.save_checkpoint_steps
     else:
         checkpoint = None
         model_opt = opt
