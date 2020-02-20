@@ -122,7 +122,7 @@ def build_generator(opt, fields, output_vec_dim=-1):
                 gen_func = nn.LogSoftmax(dim=-1)
             generator = nn.Sequential(
                 nn.Linear(opt.dec_rnn_size,
-                        len(["tgt"].base_field.vocab)),
+                        len(fields["tgt"].base_field.vocab)),
                 Cast(torch.float32),
                 gen_func
             )
@@ -283,8 +283,21 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
 
         model.load_state_dict(checkpoint['model'], strict=False)
         generator.load_state_dict(checkpoint['generator'], strict=False)
-        if mtl_generator is not None:
+        if mtl_generator is not None and 'mtl_generator' in checkpoint:  # the second argument is when one loads a nonmultitask model and trains a multitask predictor on it
             mtl_generator.load_state_dict(checkpoint['mtl_generator'], strict=False)
+        elif mtl_generator is not None:
+            if model_opt.param_init != 0.0:
+                for p in mtl_generator.parameters():
+                    p.data.uniform_(-model_opt.param_init, model_opt.param_init)
+                for p in mtl_generator.parameters():
+                    p.data.uniform_(-model_opt.param_init, model_opt.param_init)
+            if model_opt.param_init_glorot:
+                for p in mtl_generator.parameters():
+                    if p.dim() > 1:
+                        xavier_uniform_(p)
+                for p in mtl_generator.parameters():
+                    if p.dim() > 1:
+                        xavier_uniform_(p)
     else:
         if model_opt.param_init != 0.0:
             for p in model.parameters():

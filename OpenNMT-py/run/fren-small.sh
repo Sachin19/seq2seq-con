@@ -6,7 +6,7 @@ python -u train.py\
     -rnn_size 512\
     -word_vec_size 512\
     -transformer_ff 1024\
-    -heads 4 \
+    -heads 4\
     -warmup_init_lr 1e-8\
     -warmup_end_lr 0.0003\
     -min_lr 1e-9\

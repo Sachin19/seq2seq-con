@@ -13,7 +13,8 @@ def build_model_saver(model_opt, opt, model, fields, optim):
                              model_opt,
                              fields,
                              optim,
-                             opt.keep_checkpoint)
+                             opt.keep_checkpoint,
+                             opt.train_only_sec_task)
     return model_saver
 
 
@@ -26,7 +27,7 @@ class ModelSaverBase(object):
     """
 
     def __init__(self, base_path, model, model_opt, fields, optim,
-                 keep_checkpoint=-1):
+                 keep_checkpoint=-1, only_sec=False):
         self.base_path = base_path
         self.model = model
         self.model_opt = model_opt
@@ -36,6 +37,7 @@ class ModelSaverBase(object):
         self.keep_checkpoint = keep_checkpoint
         if keep_checkpoint > 0:
             self.checkpoint_queue = deque([], maxlen=keep_checkpoint)
+        self.only_sec = only_sec
 
     def save(self, step, moving_average=None):
         """Main entry point for model saver
@@ -130,8 +132,12 @@ class ModelSaver(ModelSaverBase):
             'optim': self.optim.state_dict(),
         }
 
-        logger.info("Saving checkpoint %s_step_%d.pt" % (self.base_path, step))
-        checkpoint_path = '%s_step_%d.pt' % (self.base_path, step)
+        if self.only_sec:
+            logger.info("Saving checkpoint %s_sec_step_%d.pt" % (self.base_path, step))
+            checkpoint_path = '%s_sec_step_%d.pt' % (self.base_path, step)
+        else:
+            logger.info("Saving checkpoint %s_step_%d.pt" % (self.base_path, step))
+            checkpoint_path = '%s_step_%d.pt' % (self.base_path, step)
         torch.save(checkpoint, checkpoint_path)
         return checkpoint, checkpoint_path
 

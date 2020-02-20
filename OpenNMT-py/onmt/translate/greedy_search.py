@@ -82,11 +82,11 @@ class GreedySearch(DecodeStrategy):
 
     def __init__(self, pad, bos, eos, batch_size, min_length,
                  block_ngram_repeat, exclusion_tokens, return_attention,
-                 max_length, sampling_temp, keep_topk, sec_bos, multi_task):
+                 max_length, sampling_temp, keep_topk, sec_bos, multi_task, use_feat_emb=False):
         assert block_ngram_repeat == 0
         super(GreedySearch, self).__init__(
             pad, bos, eos, batch_size, 1, min_length, block_ngram_repeat,
-            exclusion_tokens, return_attention, max_length, sec_bos, multi_task)
+            exclusion_tokens, return_attention, max_length, sec_bos, multi_task, use_feat_emb=use_feat_emb  )
         self.sampling_temp = sampling_temp
         self.keep_topk = keep_topk
         self.topk_scores = None
@@ -109,11 +109,18 @@ class GreedySearch(DecodeStrategy):
             self.batch_size, dtype=torch.long, device=device)
         self.original_batch_idx = torch.arange(
             self.batch_size, dtype=torch.long, device=device)
+        
+        if self.multi_task:
+            self.alive_sec_seq = torch.full(
+                    [self.batch_size * self.parallel_paths, 1, self.pos_topk], self.sec_bos,
+                    dtype=torch.long, device=device)
         return fn_map_state, memory_bank, self.memory_lengths, src_map
 
     @property
     def current_predictions(self):
-        return self.alive_seq[:, -1]
+        if self.use_feat_emb:
+            return torch.cat([self.alive_seq[:, -1:].unsqueeze(2), self.alive_sec_seq[:, -1:].unsqueeze(2)], dim=-1)
+        return self.alive_seq[:, -1:].unsqueeze(2)
 
     @property
     def current_sec_predictions(self):

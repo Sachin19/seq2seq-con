@@ -61,7 +61,8 @@ def build_loss_compute(model, tgt_field, opt, train=True):
         else:
             compute = NMTLossCompute(
                 criterion, loss_gen, lambda_coverage=opt.lambda_coverage,
-                lambda_align=opt.lambda_align)
+                lambda_align=opt.lambda_align, mtl_generator=model.mtl_generator,
+                lambda_mtl=opt.lambda_mtl)
         compute.to(device)
     
     else: #continuous loss functions
@@ -184,7 +185,7 @@ class LossComputeBase(nn.Module):
             batch_stats.update(stats)
         return None, batch_stats
 
-    def _stats(self, loss, scores, target):
+    def _stats(self, loss, scores, target, sec_loss=None, sec_scores=None, sec_target=None):
         """
         Args:
             loss (:obj:`FloatTensor`): the loss computed by the loss criterion.
@@ -198,7 +199,13 @@ class LossComputeBase(nn.Module):
         non_padding = target.ne(self.padding_idx)
         num_correct = pred.eq(target).masked_select(non_padding).sum().item()
         num_non_padding = non_padding.sum().item()
-        return onmt.utils.Statistics(loss.item(), num_non_padding, num_correct)
+
+        num_correct_sec=0.0
+        if sec_scores is not None:
+            sec_pred = sec_scores.max(1)[1]
+            num_correct_sec = sec_pred.eq(sec_target).masked_select(non_padding).sum().item()
+
+        return onmt.utils.Statistics(loss.item(), num_non_padding, num_correct, num_correct_sec)
 
     def _bottle(self, _v):
         return _v.view(-1, _v.size(2))
@@ -243,16 +250,27 @@ class NMTLossCompute(LossComputeBase):
     """
 
     def __init__(self, criterion, generator, normalization="sents",
-                 lambda_coverage=0.0, lambda_align=0.0):
+                 lambda_coverage=0.0, lambda_align=0.0, mtl_generator=None, lambda_mtl=0.0):
         super(NMTLossCompute, self).__init__(criterion, generator)
         self.lambda_coverage = lambda_coverage
         self.lambda_align = lambda_align
+        self.lambda_mtl = lambda_mtl
+        
+        self.mtl_generator = mtl_generator
+        if self.mtl_generator is not None:
+            self.mtl_criterion = nn.NLLLoss(ignore_index=0, reduction='sum')
 
     def _make_shard_state(self, batch, output, range_, attns=None):
         shard_state = {
             "output": output,
             "target": batch.tgt[range_[0] + 1: range_[1], :, 0],
         }
+
+        if self.mtl_generator is not None:
+            shard_state.update({
+                "sec_target": batch.tgt[range_[0] + 1: range_[1], :, 1],
+            })
+
         if self.lambda_coverage != 0.0:
             coverage = attns.get("coverage", None)
             std = attns.get("std", None)
@@ -291,7 +309,7 @@ class NMTLossCompute(LossComputeBase):
             })
         return shard_state
 
-    def _compute_loss(self, batch, output, target, std_attn=None,
+    def _compute_loss(self, batch, output, target, sec_target=None, std_attn=None,
                       coverage_attn=None, align_head=None, ref_align=None):
 
         bottled_output = self._bottle(output)
@@ -299,7 +317,21 @@ class NMTLossCompute(LossComputeBase):
         scores = self.generator(bottled_output)
         gtruth = target.view(-1)
 
+        sec_task_loss_for_stats = None
+        sec_gtruth_for_stats = None
+        sec_scores_for_stats = None
         loss = self.criterion(scores, gtruth)
+
+        if self.mtl_generator is not None and self.lambda_mtl > 0.0:
+            sec_scores = self.mtl_generator(bottled_output)
+            sec_gtruth = sec_target.view(-1)
+            sec_task_loss = self.lambda_mtl * self.mtl_criterion(sec_scores, sec_gtruth)
+            loss += sec_task_loss
+            
+            sec_task_loss_for_stats = sec_task_loss.clone()
+            sec_gtruth_for_stats = sec_gtruth.clone() 
+            sec_scores_for_stats = sec_scores.clone()
+
         if self.lambda_coverage != 0.0:
             coverage_loss = self._compute_coverage_loss(
                 std_attn=std_attn, coverage_attn=coverage_attn)
@@ -312,7 +344,7 @@ class NMTLossCompute(LossComputeBase):
             align_loss = self._compute_alignement_loss(
                 align_head=align_head, ref_align=ref_align)
             loss += align_loss
-        stats = self._stats(loss.clone(), scores, gtruth)
+        stats = self._stats(loss.clone(), scores, gtruth, sec_task_loss_for_stats, sec_scores_for_stats, sec_gtruth_for_stats)
 
         return loss, stats
 
@@ -589,5 +621,6 @@ def shards(state, shard_size, eval_only=False):
             if isinstance(v, torch.Tensor) and state[k].requires_grad:
                 variables.extend(zip(torch.split(state[k], shard_size),
                                      [v_chunk.grad for v_chunk in v_split]))
-        inputs, grads = zip(*variables)
-        torch.autograd.backward(inputs, grads)
+        if len(variables) > 0:
+            inputs, grads = zip(*variables)
+            torch.autograd.backward(inputs, grads)

@@ -70,7 +70,7 @@ def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
                            model_dtype=opt.model_dtype,
                            earlystopper=earlystopper,
                            dropout=dropout,
-                           dropout_steps=dropout_steps)
+                           dropout_steps=dropout_steps, use_feat_emb=opt.use_feat_emb)
     return trainer
 
 
@@ -107,7 +107,7 @@ class Trainer(object):
                  n_gpu=1, gpu_rank=1, gpu_verbose_level=0,
                  report_manager=None, with_align=False, model_saver=None,
                  average_decay=0, average_every=1, model_dtype='fp32',
-                 earlystopper=None, dropout=[0.3], dropout_steps=[0]):
+                 earlystopper=None, dropout=[0.3], dropout_steps=[0], use_feat_emb=False):
         # Basic attributes.
         self.model = model
         self.train_loss = train_loss
@@ -132,6 +132,7 @@ class Trainer(object):
         self.earlystopper = earlystopper
         self.dropout = dropout
         self.dropout_steps = dropout_steps
+        self.use_feat_emb = use_feat_emb
 
         for i in range(len(self.accum_count_l)):
             assert self.accum_count_l[i] > 0
@@ -312,7 +313,8 @@ class Trainer(object):
                 src, src_lengths = batch.src if isinstance(batch.src, tuple) \
                                    else (batch.src, None)
                 tgt = batch.tgt
-                tgt = tgt[:, :, :1]
+                if not self.use_feat_emb:
+                    tgt = tgt[:, :, :1]
 
                 # F-prop through the model.
                 outputs, attns = valid_model(src, tgt, src_lengths,
@@ -356,8 +358,10 @@ class Trainer(object):
             bptt = False
             for j in range(0, target_size-1, trunc_size):
                 # 1. Create truncated target.
-                tgt = tgt_outer[j: j + trunc_size, :, :1]
-
+                if self.use_feat_emb:
+                    tgt = tgt_outer[j: j + trunc_size]
+                else:
+                    tgt = tgt_outer[j: j + trunc_size, :, :1]
                 # 2. F-prop all but generator.
                 if self.accum_count == 1:
                     self.optim.zero_grad()

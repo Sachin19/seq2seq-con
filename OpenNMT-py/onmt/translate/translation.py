@@ -5,6 +5,8 @@ import torch
 from onmt.inputters.text_dataset import TextMultiField
 from onmt.utils.alignment import build_align_pharaoh
 
+from collections import Iterable
+
 
 class TranslationBuilder(object):
     """
@@ -65,17 +67,20 @@ class TranslationBuilder(object):
         
         tgt_pos_vocab = tgt_fields[1][1].vocab
         tokens_all = []
-        print(sec_pred)
-        print(base_tokens)
-        input()
+        # print(sec_pred)
+        # print(base_tokens)
+        # input()
         for i in range(len(base_tokens)): # only predict till the length of actual words
             toks = sec_pred[i]
             tokens = [] 
-            for tok in toks:
-                tokens.append(tgt_pos_vocab.itos[tok])
-                # if tokens[-1] == tgt_fields[1][1].eos_token:
-                #     tokens = tokens[:-1]
-                #     break
+            # print(toks)
+            if toks.dim() > 0:
+                for tok in toks:
+                    tokens.append(tgt_pos_vocab.itos[tok])
+                    # if tokens[-1] == tgt_fields[1][1].eos_token:
+                    #     tokens = tokens[:-1]
+                    #     break
+            else: tokens = tgt_pos_vocab.itos[toks]
             tokens_all.append(tokens)
         return tokens_all
 
@@ -135,10 +140,9 @@ class TranslationBuilder(object):
             sec_pred_sents = None
 
             if self.multi_task:
-                sec_input = sec_preds[b]
-                if len(sec_input) > 0:
-                    sec_input = sec_input[0]
-                    sec_pred_sents = self._build_sec_target_tokens(sec_input, pred_sents[0])
+                if len(sec_preds[b]) > 0:
+                    sec_pred_sents = [self._build_sec_target_tokens(sec_preds[b][n], pred_sents[n]) for n in range(self.n_best)]
+                    # sec_pred_sents = self._build_sec_target_tokens(sec_input, pred_sents[0])
                     if sec_tgt is not None:
                         # print(sec_tgt[1:, b].size())
                         # input()
@@ -213,10 +217,10 @@ class Translation(object):
         if len(self.pred_sents) > 1:
             msg.append('\nBEST HYP:\n')
             for score, sent in zip(self.pred_scores, self.pred_sents):
-                msg.append("[{:.4f}] {}\n".format(score, sent))
+                msg.append("[{:.4f}] {}\n".format(score, " ".join(sent)))
 
         if self.sec_pred_sents is not None:
-            pred_sent = " ".join(["/".join(x) for x in self.sec_pred_sents])
+            pred_sent = "\n".join([" ".join(x) for x in self.sec_pred_sents])
             msg.append('PRED TAGS {}: {}\n'.format(sent_number, pred_sent))
         
         if self.gold_sec_sent is not None:

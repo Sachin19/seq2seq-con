@@ -43,7 +43,7 @@ def model_opts(parser):
                    "Necessary for non-RNN style models.")
 
     group = parser.add_argument_group('Model-Embedding Features')
-    group.add('--use_feat_emb', '-no_feat_emb', action='store_true',
+    group.add('--use_feat_emb', '-use_feat_emb', action='store_true',
               help="Use feature embeddings, if set. Not setting this is useful for MTL with just prediction")
     group.add('--feat_merge', '-feat_merge', type=str, default='concat',
               choices=['concat', 'sum', 'mlp'],
@@ -199,6 +199,8 @@ def model_opts(parser):
               help="Apply layer normalization to the predicted vector")
     group.add('--multi_task', '-multi_task', action="store_true",
               help="Train with a multi-task objective")
+    group.add('--train_only_sec_task', '-train_only_sec_task', action="store_true",
+              help="Load a trained model (using train_from) and train only the secondary task keeping the model frozen")
     group.add('--lambda_mtl', '-lambda_mtl', type=float, default=1.0,
               help="coefficient for multitask loss")
     group.add('--copy_attn_force', '-copy_attn_force', action="store_true",
@@ -697,6 +699,8 @@ def translate_opts(parser):
     group = parser.add_argument_group('Beam')
     group.add('--beam_size', '-beam_size', type=int, default=5,
               help='Beam size')
+    group.add('--proxy_beam', '-proxy_beam', action='store_true',
+              help='Use pos for beam search as opposed to primary log probs')
     group.add('--min_length', '-min_length', type=int, default=0,
               help='Minimum prediction length')
     group.add('--max_length', '-max_length', type=int, default=100,

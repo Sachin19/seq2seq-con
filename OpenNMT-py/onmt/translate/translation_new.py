@@ -38,15 +38,17 @@ class TranslationBuilder2(object):
         self.n_best = n_best
         self.replace_unk = replace_unk
         self.lookup_dict = None
-        if phrase_table.endswith(".dictstr"):
-            self.lookup_dict = eval(open(phrase_table).read())
-            print("loaded the lookup dict", len(self.lookup_dict))
-        else:
-            self.lookup_dict = {}
-            with open(phrase_table) as f:
-                for l in f:
-                    k, v = l.strip().split("|||")
-                    self.lookup_dict[k] = v
+        self.lookup_dict = None
+        if phrase_table != "":
+            if phrase_table.endswith(".dictstr"):
+                self.lookup_dict = eval(open(phrase_table).read())
+                print("loaded the lookup dict", len(self.lookup_dict))
+            else:
+                self.lookup_dict = {}
+                with open(phrase_table) as f:
+                    for l in f:
+                        k, v = l.strip().split("|||")
+                        self.lookup_dict[k] = v
                     
         self.has_tgt = has_tgt
         self.multi_task = multi_task

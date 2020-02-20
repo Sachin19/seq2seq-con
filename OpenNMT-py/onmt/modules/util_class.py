@@ -22,6 +22,8 @@ class Elementwise(nn.ModuleList):
 
     def forward(self, inputs):
         inputs_ = [feat.squeeze(2) for feat in inputs.split(1, dim=2)]
+        # print(len(self))
+        # print(len(inputs_))
         assert len(self) == len(inputs_)
         outputs = [f(x) for f, x in zip(self, inputs_)]
         if self.merge == 'first':

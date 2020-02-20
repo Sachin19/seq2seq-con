@@ -58,11 +58,11 @@ class BeamSearch(DecodeStrategy):
     def __init__(self, beam_size, batch_size, pad, bos, eos, n_best,
                  global_scorer, min_length, max_length, return_attention,
                  block_ngram_repeat, exclusion_tokens,
-                 stepwise_penalty, ratio, pos_topk=1):
+                 stepwise_penalty, ratio, pos_topk=1, multi_task=False, use_feat_emb=False):
         super(BeamSearch, self).__init__(
             pad, bos, eos, batch_size, beam_size, min_length,
             block_ngram_repeat, exclusion_tokens, return_attention,
-            max_length)
+            max_length, use_feat_emb=use_feat_emb, multi_task=multi_task)
         # beam parameters
         self.global_scorer = global_scorer
         self.beam_size = beam_size
@@ -139,7 +139,9 @@ class BeamSearch(DecodeStrategy):
 
     @property
     def current_predictions(self):
-        return self.alive_seq[:, -1]
+        if self.use_feat_emb:
+            return torch.cat([self.alive_seq[:, -1:].unsqueeze(2), self.alive_sec_seq[:, -1:].unsqueeze(2)], dim=-1)
+        return self.alive_seq[:, -1:].unsqueeze(2)
 
     @property
     def current_backptr(self):
@@ -200,6 +202,15 @@ class BeamSearch(DecodeStrategy):
         self.alive_seq = torch.cat(
             [self.alive_seq.index_select(0, self.select_indices),
              self.topk_ids.view(_B * self.beam_size, 1)], -1)
+
+        if self.multi_task:
+            topk_sec_scores, topk_sec_ids = torch.max(pos_log_probs.index_select(0, self.select_indices), dim=-1)
+            self.topk_sec_scores = topk_sec_scores.view(-1, self.beam_size)
+            self.topk_sec_ids = topk_sec_ids.view(-1, self.beam_size)
+            
+            self.alive_sec_seq = torch.cat(
+                [self.alive_sec_seq.index_select(0, self.select_indices),
+                self.topk_sec_ids.view(_B * self.beam_size, 1)], -1)
 
         self.maybe_update_forbidden_tokens()
 

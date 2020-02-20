@@ -1,24 +1,22 @@
 source activate gans
 #currently running=null
-SAVEDIR='logs/wmt16deen.transformer.vmf.2'
-export CUDA_VISIBLE_DEVICES=0,1
-export THC_CACHING_ALLOCATOR=0
+SAVEDIR='logs/deen.transformer.vmf.2'
 mkdir -p $SAVEDIR
-python -u -W ignore train.py\
-    -data ../../kumarvon2018-data/wmt16deen/conmt300/data\
+python -u train.py\
+    -data ../../kumarvon2018-data/deen/deen.prepared.conmt\
     -save_model $SAVEDIR/model\
     -layers 6\
     -rnn_size 512\
     -word_vec_size 512\
-    -transformer_ff 2048\
-    -heads 8\
+    -transformer_ff 1024\
+    -heads 4\
     -warmup_init_lr 1e-8\
     -warmup_end_lr 0.0007\
     -min_lr 1e-9\
     -encoder_type transformer\
     -decoder_type transformer\
     -position_encoding\
-    -train_steps 250000\
+    -train_steps 40000\
     -max_generator_batches 2\
     -dropout 0.1\
     -batch_size 4000\
@@ -36,12 +34,12 @@ python -u -W ignore train.py\
     -param_init_glorot\
     -label_smoothing 0.1\
     -valid_steps 2000\
-    -save_checkpoint_steps 10000\
-    -world_size 2\
+    -save_checkpoint_steps 2000\
+    -world_size 1\
     -generator_function continuous-linear\
     -loss nllvmf\
     -share_decoder_embeddings\
     -generator_layer_norm\
     -lambda_vmf 0.2\
-    -master_port 10001\
-    -gpu_ranks 0 1 > $SAVEDIR/log.out 2>&1 
+    -center\
+    -gpu_ranks 0 > $SAVEDIR/log.out 2>&1 

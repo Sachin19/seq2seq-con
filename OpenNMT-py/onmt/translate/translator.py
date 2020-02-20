@@ -12,6 +12,7 @@ import torch
 import onmt.model_builder
 import onmt.inputters as inputters
 import onmt.decoders.ensemble
+from onmt.translate.proxy_beam_search import ProxyBeamSearch
 from onmt.translate.beam_search import BeamSearch
 from onmt.translate.greedy_search import GreedySearch
 from onmt.utils.misc import tile, set_random_seed, report_matrix
@@ -22,6 +23,11 @@ from onmt.modules.ive import logcmk
 def build_translator(opt, report_score=True, logger=None, out_file=None):
     if out_file is None:
         out_file = codecs.open(opt.output, 'w+', 'utf-8')
+    
+    sec_out_file = None
+    if opt.multi_task:
+        print("yesyesyes")
+        sec_out_file = codecs.open(opt.output+".sec", "w+", 'utf-8')
 
     load_test_model = onmt.decoders.ensemble.load_test_model \
         if len(opt.models) > 1 else onmt.model_builder.load_test_model
@@ -36,6 +42,7 @@ def build_translator(opt, report_score=True, logger=None, out_file=None):
         model_opt,
         global_scorer=scorer,
         out_file=out_file,
+        sec_out_file=sec_out_file,
         report_align=opt.report_align,
         report_score=report_score,
         logger=logger
@@ -127,6 +134,7 @@ class Translator(object):
             copy_attn=False,
             global_scorer=None,
             out_file=None,
+            sec_out_file=None,
             report_align=False,
             report_score=True,
             logger=None,
@@ -135,7 +143,9 @@ class Translator(object):
             generator_function="softmax",
             multi_task=False,
             pos_topk=1,
-            usenew=False):
+            usenew=False,
+            proxy_beam=False,
+            use_feat_emb=False):
         self.model = model
         self.fields = fields
 
@@ -204,6 +214,7 @@ class Translator(object):
             raise ValueError(
                 "Coverage penalty requires an attentional decoder.")
         self.out_file = out_file
+        self.sec_out_file = sec_out_file
         self.report_align = report_align
         self.report_score = report_score
         self.logger = logger
@@ -229,6 +240,8 @@ class Translator(object):
         self.pos_topk = pos_topk
 
         self.usenew = usenew
+        self.proxy_beam = proxy_beam
+        self.use_feat_emb = use_feat_emb
 
     @classmethod
     def from_opt(
@@ -239,6 +252,7 @@ class Translator(object):
             model_opt,
             global_scorer=None,
             out_file=None,
+            sec_out_file=None,
             report_align=False,
             report_score=True,
             logger=None,
@@ -288,6 +302,7 @@ class Translator(object):
             copy_attn=model_opt.copy_attn,
             global_scorer=global_scorer,
             out_file=out_file,
+            sec_out_file=sec_out_file,
             report_align=report_align,
             report_score=report_score,
             logger=logger,
@@ -296,7 +311,9 @@ class Translator(object):
             generator_function=model_opt.generator_function,
             multi_task=opt.multi_task,
             pos_topk=opt.pos_topk,
-            usenew=opt.usenew)
+            usenew=opt.usenew,
+            proxy_beam=opt.proxy_beam,
+            use_feat_emb=model_opt.use_feat_emb)
 
     def _log(self, msg):
         if self.logger:
@@ -390,6 +407,7 @@ class Translator(object):
 
         all_scores = []
         all_predictions = []
+        all_sec_predictions = []
 
         start_time = time.time()
 
@@ -409,6 +427,13 @@ class Translator(object):
 
                 n_best_preds = [" ".join(pred)
                                 for pred in trans.pred_sents[:self.n_best]]
+                if self.multi_task:
+                    n_best_sec_preds = [" ".join(pred)
+                                for pred in trans.sec_pred_sents[:self.n_best]]
+                    # print(n_best_sec_preds)
+                    # input()
+                    # [" ".join(trans.sec_pred_sents)]              
+
                 if self.report_align:
                     align_pharaohs = [build_align_pharaoh(align) for align
                                       in trans.word_aligns[:self.n_best]]
@@ -418,8 +443,14 @@ class Translator(object):
                                     for pred, align in zip(
                                         n_best_preds, n_best_preds_align)]
                 all_predictions += [n_best_preds]
+                if self.multi_task and self.pos_topk > 0:
+                    all_sec_predictions += [n_best_sec_preds]
                 self.out_file.write('\n'.join(n_best_preds) + '\n')
                 self.out_file.flush()
+                
+                if self.sec_out_file is not None:
+                    self.sec_out_file.write('\n'.join(n_best_sec_preds) + '\n')
+                    self.sec_out_file.flush()
 
                 if self.verbose:
                     sent_number = next(counter)
@@ -428,7 +459,8 @@ class Translator(object):
                         self.logger.info(output)
                     else:
                         os.write(1, output.encode('utf-8'))
-
+                    input("hola")
+                    
                 if attn_debug:
                     preds = trans.pred_sents[0]
                     preds.append('</s>')
@@ -560,7 +592,27 @@ class Translator(object):
     def translate_batch(self, batch, src_vocabs, attn_debug):
         """Translate a batch of sentences."""
         with torch.no_grad():
-            if self.beam_size == 1:
+            if self.proxy_beam:
+                assert not self.dump_beam
+                decode_strategy = ProxyBeamSearch(
+                    self.beam_size,
+                    batch_size=batch.batch_size,
+                    pad=self._tgt_pad_idx,
+                    bos=self._tgt_bos_idx,
+                    eos=self._tgt_eos_idx,
+                    n_best=self.n_best,
+                    global_scorer=self.global_scorer,
+                    min_length=self.min_length, max_length=self.max_length,
+                    return_attention=attn_debug or self.replace_unk,
+                    block_ngram_repeat=self.block_ngram_repeat,
+                    exclusion_tokens=self._exclusion_idxs,
+                    stepwise_penalty=self.stepwise_penalty,
+                    ratio=self.ratio, 
+                    sec_bos=self._sec_tgt_bos_idx,
+                    multi_task=self.multi_task,
+                    vocab2pos=self.vocab2pos,
+                    use_feat_emb=self.use_feat_emb)
+            elif self.beam_size == 1:
                 decode_strategy = GreedySearch(
                     pad=self._tgt_pad_idx,
                     bos=self._tgt_bos_idx,
@@ -572,7 +624,8 @@ class Translator(object):
                     return_attention=attn_debug or self.replace_unk,
                     sampling_temp=self.random_sampling_temp,
                     keep_topk=self.sample_from_topk,
-                    sec_bos=self._sec_tgt_bos_idx, multi_task=self.multi_task)
+                    sec_bos=self._sec_tgt_bos_idx, multi_task=self.multi_task,
+                    use_feat_emb=self.use_feat_emb)
             else:
                 # TODO: support these blacklisted features
                 assert not self.dump_beam
@@ -589,7 +642,8 @@ class Translator(object):
                     block_ngram_repeat=self.block_ngram_repeat,
                     exclusion_tokens=self._exclusion_idxs,
                     stepwise_penalty=self.stepwise_penalty,
-                    ratio=self.ratio)
+                    ratio=self.ratio,
+                    use_feat_emb=self.use_feat_emb)
             return self._translate_batch_with_strategy(batch, src_vocabs,
                                                        decode_strategy)
 
@@ -639,21 +693,25 @@ class Translator(object):
                 attn = dec_attn["std"]
             else:
                 attn = None
-            
+
             if "continuous" in self.generator_function:
                 if print_:
                     print(dec_out)
                 pred_emb = self.model.generator(dec_out.squeeze(0))
-                pos_log_probs = None
-                if self.multi_task:
-                    if print_:
-                        print(self.model.mtl_generator[0].weight)
-                        input()
-                    pos_log_probs = self.model.mtl_generator(dec_out.squeeze(0))
-                log_probs = self._emb_to_scores(pred_emb, self.model.decoder.tgt_out_emb, pos_log_probs, self.vocab2pos)
-                    
+                log_probs = self._emb_to_scores(pred_emb, self.model.decoder.tgt_out_emb)
             else:
                 log_probs = self.model.generator(dec_out.squeeze(0))
+            
+            pos_log_probs = None
+            if self.multi_task:
+                pos_log_probs = self.model.mtl_generator(dec_out.squeeze(0))
+                if self.vocab2pos is not None and self.pos_topk > 0:  # filter the vocab based on pos tag predictions
+                    _, predicted_pos = pos_log_probs.topk(k=self.pos_topk, dim=-1)
+                    #next line creates a zero matrix and fills 1 at the predicted pos tags, because we want to use them now
+                    predicted_pos_hot = torch.zeros_like(pos_log_probs).scatter_(dim=-1, index=predicted_pos, value=1.0)# (batch_size x num_pos)
+                    # for each word in the vocab, get 1 if the pos tag is predicted for that word, else 0
+                    activated_vocab = predicted_pos_hot.matmul(vocab2pos.t()).gt(0.).float() #(batch_size x V) 
+                    log_probs = activated_vocab * log_probs
 
             # returns [(batch_size x beam_size) , vocab ] when 1 step
             # or [ tgt_len, batch_size, vocab ] when full sentence
@@ -683,19 +741,7 @@ class Translator(object):
 
         return (log_probs, pos_log_probs), attn
     
-    def _emb_to_scores(self, pred_emb, tgt_out_emb, pos_log_probs=None, vocab2pos=None):
-        activated_vocab = None
-        if vocab2pos is not None and self.pos_topk > 0:  # filter the vocab based on pos tag predictions
-            _, predicted_pos = pos_log_probs.topk(k=self.pos_topk, dim=-1)
-            # print(predicted_pos.size())
-            #next line creates a zero matrix and fills 1 at the predicted pos tags, because we want to use them now
-            predicted_pos_hot = torch.zeros_like(pos_log_probs).scatter_(dim=-1, index=predicted_pos, value=1.0)# (batch_size x num_pos)
-            # for each word in the vocab, get 1 if the pos tag is predicted for that word, else 0
-            activated_vocab = predicted_pos_hot.matmul(vocab2pos.t()).gt(0.).float() #(batch_size x V) 
-            # print(activated_vocab)
-            # print(predicted_pos)
-            # print(predicted_pos_hot.max(dim=-1)[1] )
-            # input()
+    def _emb_to_scores(self, pred_emb, tgt_out_emb):
 
         if self.decode_loss == "l2": 
             rA = (pred_emb * pred_emb).sum(dim=1)
@@ -721,8 +767,6 @@ class Translator(object):
             pred_emb_unitnorm = torch.nn.functional.normalize(pred_emb, p=2, dim=-1)
             scores = pred_emb_unitnorm.matmul(tgt_out_emb.weight.t())
         
-        if activated_vocab is not None:
-            return activated_vocab * scores
         return scores
 
     def _translate_batch_with_strategy(
@@ -771,8 +815,8 @@ class Translator(object):
         # (3) Begin decoding step by step:
         # sec_predictions = None
         for step in range(decode_strategy.max_length):
-            decoder_input = decode_strategy.current_predictions.view(1, -1, 1)
-
+            decoder_input = decode_strategy.current_predictions
+            decoder_input = decoder_input.view(1, -1, decoder_input.size(2))
             (log_probs, sec_log_probs), attn = self._decode_and_generate(
                 decoder_input,
                 memory_bank,

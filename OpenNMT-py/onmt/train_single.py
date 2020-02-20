@@ -28,7 +28,8 @@ def _tally_parameters(model):
     nontrainable = 0
     for name, param in model.named_parameters():
         if 'encoder' in name:
-            enc += param.nelement()
+            if param.requires_grad:
+                enc += param.nelement()
         else:
             if param.requires_grad:
                 dec += param.nelement()
@@ -59,11 +60,18 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
         ArgumentParser.update_model_opts(model_opt)
         ArgumentParser.validate_model_opts(model_opt)
         logger.info('Loading vocab from checkpoint at %s.' % opt.train_from)
-        vocab = checkpoint['vocab']
 
         if opt.modify_opts:  #modify some of the following opts with new ones
             model_opt.save_checkpoint_steps = opt.save_checkpoint_steps
             model_opt.train_steps = opt.train_steps
+            model_opt.train_only_sec_task = opt.train_only_sec_task
+            model_opt.multi_task = opt.multi_task
+        
+        if opt.train_only_sec_task:
+            vocab = torch.load(opt.data + '.vocab.pt')
+        else:
+            vocab = checkpoint['vocab']
+
     else:
         checkpoint = None
         model_opt = opt
@@ -90,15 +98,26 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
 
     # Build model.
     model = build_model(model_opt, opt, fields, checkpoint)
+    logger.info(model.mtl_generator)
+    _check_save_model_path(opt)
+
+    # Build optimizer.
+    if opt.train_only_sec_task:
+        logger.info("Since train_sec_task is set, the optimizer will have only pos prediction parameters, others will be frozen")
+        #freeze other model parameters
+        for name, p in model.named_parameters():
+            logger.info(name)
+            if "mtl_generator" not in name:
+                p.requires_grad = False
+        opt.reset_optim=True
+    
+    optim = Optimizer.from_opt(model, opt, checkpoint=checkpoint)
+
     n_params, enc, dec, nontrainable = _tally_parameters(model)
     logger.info('encoder: %d' % enc)
     logger.info('decoder: %d' % dec)
     logger.info('non-trainable parameters (tgt_out_emb): %d' % nontrainable)
     logger.info('* number of parameters: %d' % n_params)
-    _check_save_model_path(opt)
-
-    # Build optimizer.
-    optim = Optimizer.from_opt(model, opt, checkpoint=checkpoint)
 
     # Build model saver
     model_saver = build_model_saver(model_opt, opt, model, fields, optim)
