@@ -418,13 +418,22 @@ class ContinuousLossCompute(LossComputeBase):
         return loss, cosine_loss, None  # scores
 
     def _cosine(self, output_emb, target_emb, mask):
-        batch_size = outputs.size(1)
+        batch_size = output_emb.size(1)
 
         target_emb_unitnorm = torch.nn.functional.normalize(target_emb, p=2, dim=-1)
         output_emb_unitnorm = torch.nn.functional.normalize(output_emb, p=2, dim=-1)
 
         cosine_loss = (1.0 - (output_emb_unitnorm * target_emb_unitnorm).sum(dim=-1)).masked_select(mask).sum()
         return loss, cosine_loss 
+    
+    def _l2(self, output_emb, target_emb, mask):
+        target_emb_unitnorm = torch.nn.functional.normalize(target_emb, p=2, dim=-1)
+        output_emb_unitnorm = torch.nn.functional.normalize(output_emb, p=2, dim=-1)
+
+        cosine_loss = (1.0 - (output_emb_unitnorm * target_emb_unitnorm).sum(dim=-1)).masked_select(mask).sum()
+        diff = (output_emb - target_emb)
+        l2_loss = (diff * diff).sum(dim=-1).masked_select(mask).sum()
+        return l2_loss, cosine_loss 
 
     def _make_shard_state(self, batch, output, range_, attns=None):
         shard_state = {
@@ -487,7 +496,9 @@ class ContinuousLossCompute(LossComputeBase):
         if self.loss_type == 'nllvmf':
             loss, cosine_loss, scores = self._nllvmf(output_emb, target_emb, gtruth.ne(self.padding_idx))
         elif self.loss_type == 'cosine':
-            loss, cosine_loss = self._nllvmf(output_emb, target_emb, gtruth.ne(self.padding_idx))
+            loss, cosine_loss = self._cosine(output_emb, target_emb, gtruth.ne(self.padding_idx))
+        elif self.loss_type == 'l2':
+            loss, cosine_loss = self._l2(output_emb, target_emb, gtruth.ne(self.padding_idx))
         # loss = self.criterion(scores, gtruth)
 
         other_task_loss_for_stats = None

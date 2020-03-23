@@ -1,11 +1,11 @@
 source activate gans
 #currently running=null
-SAVEDIR='logs/wmt16deen.transformer.l2'
+SAVEDIR='logs/enpt.vecmapped.vmf'
 export CUDA_VISIBLE_DEVICES=0,1
 export THC_CACHING_ALLOCATOR=0
 mkdir -p $SAVEDIR
 python -u -W ignore train.py\
-    -data ../../kumarvon2018-data/wmt16deen/conmt300/data\
+    -data ../../kumarvon2018-data/enpt/conmt300vecmap/data\
     -save_model $SAVEDIR/model\
     -layers 6\
     -rnn_size 512\
@@ -39,10 +39,10 @@ python -u -W ignore train.py\
     -save_checkpoint_steps 10000\
     -world_size 2\
     -generator_function continuous-linear\
-    -loss l2\
+    -loss nllvmf\
     -generator_layer_norm\
     -lambda_vmf 0.2\
-    -master_port 10004\
+    -master_port 10005\
     -negunk\
     -gpu_ranks 0 1 > $SAVEDIR/log.out 2>&1 
 # -share_decoder_embeddings\

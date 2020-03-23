@@ -66,12 +66,20 @@ class TranslationBuilder2(object):
                 tokens = tokens[:-1]
                 break
         if self.replace_unk and attn is not None and src is not None:
+            # print("YASSS")
+            # input()
             for i in range(len(tokens)):
                 _, max_index = attn[i][:len(src_raw)].max(0)
                 if tokens[i] == tgt_field.unk_token:
                     
                     _, max_index = attn[i][:len(src_raw)].topk(2, 0)
                     dist = (max_index[0] - i) * 1.0 / len(src) 
+
+                    # print(src_raw)
+                    # print(tokens)
+                    # print(src_raw[max_index[0].item()])
+                    # print(attn[i][:len(src_raw)])
+                    # raw_input()
                     
                     if src_raw[max_index[0]] in [",", "."] or dist > 0.5 or dist < -0.5:
                         mI = max_index[1].item()
@@ -92,6 +100,8 @@ class TranslationBuilder2(object):
                             t += " " + src_raw[k]
 
                     if self.lookup_dict is not None:
+                        # print("OKRRR")
+                        # input()
                         t = t.replace("@@", "").replace(" ", "")
                         if t in self.lookup_dict:
                             print(t, self.lookup_dict[t])

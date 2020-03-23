@@ -249,6 +249,13 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
             center_emb = tgt_out_vectors.sum(dim=0, keepdim=True) / (tgt_out_vectors.size(0))
             tgt_out_vectors = tgt_out_vectors - center_emb
         tgt_out_vectors_unitnorm = nn.functional.normalize(tgt_out_vectors, p=2, dim=1)
+        
+        print("NEGUNK =", model_opt.negunk)
+        if model_opt.negunk:
+            bfield = tgt_field.base_field
+            print("UNK =",bfield.unk_token)
+            tgt_out_vectors_unitnorm[bfield.vocab.stoi[bfield.unk_token]] =\
+                -tgt_out_vectors_unitnorm[bfield.vocab.stoi[bfield.unk_token]]
 
         tgt_out_emb = nn.Embedding(tgt_out_vectors.size(0), tgt_out_vectors.size(1))
         tgt_out_emb.weight.data.copy_(tgt_out_vectors_unitnorm)

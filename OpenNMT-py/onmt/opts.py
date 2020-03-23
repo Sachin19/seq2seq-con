@@ -181,7 +181,7 @@ def model_opts(parser):
               help="The copy attention type to use. Leave as None to use "
                    "the same as -global_attention.")
     group.add('--loss', '-loss', default="ce",
-              choices=['ce', 'nllvmf', 'cosine'],
+              choices=['ce', 'nllvmf', 'cosine', 'l2'],
               help="What loss function to use for training the model (choices:"
                    "cross entropy(ce), nllvmf, cosine")
     group.add('--approximate_vmf', '-approximate_vmf', action='store_true',
@@ -195,6 +195,8 @@ def model_opts(parser):
               help="Which function to use for generating "
                    "probabilities over the target vocabulary (choices: "
                    "softmax, sparsemax)")
+    group.add('--negunk', '-negunk', action="store_true",
+              help="Take the negative of the current unk vector as the unk vector")
     group.add('--generator_layer_norm', '-generator_layer_norm', action="store_true",
               help="Apply layer normalization to the predicted vector")
     group.add('--multi_task', '-multi_task', action="store_true",

@@ -753,7 +753,7 @@ class Translator(object):
             rB[2].data += 10.0
             rB = rB.unsqueeze(dim=0)
 
-            M = 2 * out.matmul(B.t())
+            M = 2 * pred_emb.matmul(B.t())
             dists = rA - M
             dists = dists + rB
             scores = 100000 - dists  # just to make them positive
