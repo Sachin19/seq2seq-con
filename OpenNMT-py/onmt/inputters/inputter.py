@@ -342,8 +342,8 @@ def _build_field_vocab(field, counter, size_multiple=1, emb_file=None, base_fiel
     # this is basically copy-pasted from torchtext.
     # print(field)
     all_specials = [
+        field.unk_token,
         field.pad_token, 
-        field.unk_token, 
         field.init_token, 
         field.eos_token
     ]
@@ -430,6 +430,8 @@ def _build_field_vocab(field, counter, size_multiple=1, emb_file=None, base_fiel
 
     if size_multiple > 1:
         _pad_vocab_to_multiple(field.vocab, size_multiple)
+    
+    return field
 
 
 def _load_vocab(vocab_path, name, counters, min_freq):
@@ -756,10 +758,11 @@ class OrderedIterator(torchtext.data.Iterator):
                 if self.yield_raw_example:
                     yield minibatch[0]
                 else:
-                    yield torchtext.data.Batch(
+                    batch = torchtext.data.Batch(
                         minibatch,
                         self.dataset,
                         self.device)
+                    yield batch 
             if not self.repeat:
                 return
 
