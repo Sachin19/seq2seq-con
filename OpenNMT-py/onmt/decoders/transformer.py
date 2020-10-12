@@ -8,6 +8,7 @@ import torch.nn as nn
 from onmt.decoders.decoder import DecoderBase
 from onmt.modules import MultiHeadedAttention, AverageAttention
 from onmt.modules.position_ffn import PositionwiseFeedForward
+from onmt.modules.adapter_layer import AdapterLayer
 from onmt.utils.misc import sequence_mask
 
 
@@ -23,23 +24,38 @@ class TransformerDecoderLayer(nn.Module):
       self_attn_type (string): type of self-attention scaled-dot, average
     """
 
-    def __init__(self, d_model, heads, d_ff, dropout, attention_dropout,
-                 self_attn_type="scaled-dot", max_relative_positions=0,
-                 aan_useffn=False, full_context_alignment=False,
-                 alignment_heads=None):
+    def __init__(
+        self,
+        d_model,
+        heads,
+        d_ff,
+        dropout,
+        attention_dropout,
+        self_attn_type="scaled-dot",
+        max_relative_positions=0,
+        aan_useffn=False,
+        full_context_alignment=False,
+        alignment_heads=None,
+        num_adapters=0,
+        d_adapter=0,
+    ):
         super(TransformerDecoderLayer, self).__init__()
 
         if self_attn_type == "scaled-dot":
             self.self_attn = MultiHeadedAttention(
-                heads, d_model, dropout=dropout,
-                max_relative_positions=max_relative_positions)
+                heads,
+                d_model,
+                dropout=dropout,
+                max_relative_positions=max_relative_positions,
+            )
         elif self_attn_type == "average":
-            self.self_attn = AverageAttention(d_model,
-                                              dropout=attention_dropout,
-                                              aan_useffn=aan_useffn)
+            self.self_attn = AverageAttention(
+                d_model, dropout=attention_dropout, aan_useffn=aan_useffn
+            )
 
         self.context_attn = MultiHeadedAttention(
-            heads, d_model, dropout=attention_dropout)
+            heads, d_model, dropout=attention_dropout
+        )
         self.feed_forward = PositionwiseFeedForward(d_model, d_ff, dropout)
         self.layer_norm_1 = nn.LayerNorm(d_model, eps=1e-6)
         self.layer_norm_2 = nn.LayerNorm(d_model, eps=1e-6)
@@ -47,8 +63,15 @@ class TransformerDecoderLayer(nn.Module):
         self.full_context_alignment = full_context_alignment
         self.alignment_heads = alignment_heads
 
+        # adapter layers
+        self.adapter_layers = []  # one for each target language
+        for adapter_id in range(num_adapters):
+            self.adapter_layers.append(
+                AdapterLayer(d_model, d_adapter, dropout=dropout)
+            )
+
     def forward(self, *args, **kwargs):
-        """ Extend _forward for (possibly) multiple decoder pass:
+        """Extend _forward for (possibly) multiple decoder pass:
         1. Always a default (future masked) decoder forward pass,
         2. Possibly a second future aware decoder pass for joint learn
             full context alignement.
@@ -64,7 +87,7 @@ class TransformerDecoderLayer(nn.Module):
             * top_attn ``(batch_size, 1, src_len)``
             * attn_align ``(batch_size, 1, src_len)`` or None
         """
-        with_align = kwargs.pop('with_align', False)
+        with_align = kwargs.pop("with_align", False)
         output, attns = self._forward(*args, **kwargs)
         top_attn = attns[:, 0, :, :].contiguous()
         attn_align = None
@@ -74,7 +97,7 @@ class TransformerDecoderLayer(nn.Module):
                 _, attns = self._forward(*args, **kwargs, future=True)
 
             if self.alignment_heads is not None:
-                attns = attns[:, :self.alignment_heads, :, :].contiguous()
+                attns = attns[:, : self.alignment_heads, :, :].contiguous()
             # layer average attention across heads, get ``(B, Q, K)``
             # Case 1: no full_context, no align heads -> layer avg baseline
             # Case 2: no full_context, 1 align heads -> guided align
@@ -82,9 +105,18 @@ class TransformerDecoderLayer(nn.Module):
             attn_align = attns.mean(dim=1)
         return output, top_attn, attn_align
 
-    def _forward(self, inputs, memory_bank, src_pad_mask, tgt_pad_mask,
-                 layer_cache=None, step=None, future=False):
-        """ A naive forward pass for transformer decoder.
+    def _forward(
+        self,
+        inputs,
+        memory_bank,
+        src_pad_mask,
+        tgt_pad_mask,
+        layer_cache=None,
+        step=None,
+        future=False,
+        adapter_id=-1,
+    ):
+        """A naive forward pass for transformer decoder.
         # TODO: change 1 to T as T could be 1 or tgt_len
         Args:
             inputs (FloatTensor): ``(batch_size, 1, model_dim)``
@@ -105,9 +137,8 @@ class TransformerDecoderLayer(nn.Module):
             tgt_len = tgt_pad_mask.size(-1)
             if not future:  # apply future_mask, result mask in (B, T, T)
                 future_mask = torch.ones(
-                    [tgt_len, tgt_len],
-                    device=tgt_pad_mask.device,
-                    dtype=torch.uint8)
+                    [tgt_len, tgt_len], device=tgt_pad_mask.device, dtype=torch.uint8
+                )
                 future_mask = future_mask.triu_(1).view(1, tgt_len, tgt_len)
                 # BoolTensor was introduced in pytorch 1.2
                 try:
@@ -121,22 +152,34 @@ class TransformerDecoderLayer(nn.Module):
         input_norm = self.layer_norm_1(inputs)
 
         if isinstance(self.self_attn, MultiHeadedAttention):
-            query, _ = self.self_attn(input_norm, input_norm, input_norm,
-                                      mask=dec_mask,
-                                      layer_cache=layer_cache,
-                                      attn_type="self")
+            query, _ = self.self_attn(
+                input_norm,
+                input_norm,
+                input_norm,
+                mask=dec_mask,
+                layer_cache=layer_cache,
+                attn_type="self",
+            )
         elif isinstance(self.self_attn, AverageAttention):
-            query, _ = self.self_attn(input_norm, mask=dec_mask,
-                                      layer_cache=layer_cache, step=step)
+            query, _ = self.self_attn(
+                input_norm, mask=dec_mask, layer_cache=layer_cache, step=step
+            )
 
         query = self.drop(query) + inputs
 
         query_norm = self.layer_norm_2(query)
-        mid, attns = self.context_attn(memory_bank, memory_bank, query_norm,
-                                       mask=src_pad_mask,
-                                       layer_cache=layer_cache,
-                                       attn_type="context")
+        mid, attns = self.context_attn(
+            memory_bank,
+            memory_bank,
+            query_norm,
+            mask=src_pad_mask,
+            layer_cache=layer_cache,
+            attn_type="context",
+        )
         output = self.feed_forward(self.drop(mid) + query)
+
+        if adapter_id > -1:
+            output = self.adapter_layers[adapter_id]
 
         return output, attns
 
@@ -177,11 +220,25 @@ class TransformerDecoder(DecoderBase):
           embeddings to use, should have positional encodings
     """
 
-    def __init__(self, num_layers, d_model, heads, d_ff,
-                 copy_attn, self_attn_type, dropout, attention_dropout,
-                 embeddings, max_relative_positions, aan_useffn,
-                 full_context_alignment, alignment_layer,
-                 alignment_heads=None):
+    def __init__(
+        self,
+        num_layers,
+        d_model,
+        heads,
+        d_ff,
+        copy_attn,
+        self_attn_type,
+        dropout,
+        attention_dropout,
+        embeddings,
+        max_relative_positions,
+        aan_useffn,
+        full_context_alignment,
+        alignment_layer,
+        alignment_heads=None,
+        num_adapters=0,
+        d_adapter=0,
+    ):
         super(TransformerDecoder, self).__init__()
 
         self.embeddings = embeddings
@@ -190,13 +247,24 @@ class TransformerDecoder(DecoderBase):
         self.state = {}
 
         self.transformer_layers = nn.ModuleList(
-            [TransformerDecoderLayer(d_model, heads, d_ff, dropout,
-             attention_dropout, self_attn_type=self_attn_type,
-             max_relative_positions=max_relative_positions,
-             aan_useffn=aan_useffn,
-             full_context_alignment=full_context_alignment,
-             alignment_heads=alignment_heads)
-             for i in range(num_layers)])
+            [
+                TransformerDecoderLayer(
+                    d_model,
+                    heads,
+                    d_ff,
+                    dropout,
+                    attention_dropout,
+                    self_attn_type=self_attn_type,
+                    max_relative_positions=max_relative_positions,
+                    aan_useffn=aan_useffn,
+                    full_context_alignment=full_context_alignment,
+                    alignment_heads=alignment_heads,
+                    num_adapters=num_adapters
+                    d_adapter=d_adapter
+                )
+                for i in range(num_layers)
+            ]
+        )
 
         # previously, there was a GlobalAttention module here for copy
         # attention. But it was never actually used -- the "copy" attention
@@ -217,14 +285,18 @@ class TransformerDecoder(DecoderBase):
             opt.copy_attn,
             opt.self_attn_type,
             opt.dropout[0] if type(opt.dropout) is list else opt.dropout,
-            opt.attention_dropout[0] if type(opt.attention_dropout)
-            is list else opt.dropout,
+            opt.attention_dropout[0]
+            if type(opt.attention_dropout) is list
+            else opt.dropout,
             embeddings,
             opt.max_relative_positions,
             opt.aan_useffn,
             opt.full_context_alignment,
             opt.alignment_layer,
-            alignment_heads=opt.alignment_heads)
+            alignment_heads=opt.alignment_heads,
+            num_adapters=opt.num_adapters,
+            d_adapter=opt.adapter_dim
+        )
 
     def init_state(self, src, memory_bank, enc_hidden):
         """Initialize decoder state."""
@@ -266,12 +338,15 @@ class TransformerDecoder(DecoderBase):
         src_pad_mask = ~sequence_mask(src_lens, src_max_len).unsqueeze(1)
         tgt_pad_mask = tgt_words.data.eq(pad_idx).unsqueeze(1)  # [B, 1, T_tgt]
 
-        with_align = kwargs.pop('with_align', False)
+        with_align = kwargs.pop("with_align", False)
         attn_aligns = []
+        
+        adapter_id = kwargs.pop("adapter_id", -1)  #which adapter to use
 
         for i, layer in enumerate(self.transformer_layers):
-            layer_cache = self.state["cache"]["layer_{}".format(i)] \
-                if step is not None else None
+            layer_cache = (
+                self.state["cache"]["layer_{}".format(i)] if step is not None else None
+            )
             output, attn, attn_align = layer(
                 output,
                 src_memory_bank,
@@ -279,7 +354,9 @@ class TransformerDecoder(DecoderBase):
                 tgt_pad_mask,
                 layer_cache=layer_cache,
                 step=step,
-                with_align=with_align)
+                with_align=with_align,
+                adapter_id=adapter_id
+            )
             if attn_align is not None:
                 attn_aligns.append(attn_align)
 
@@ -305,8 +382,9 @@ class TransformerDecoder(DecoderBase):
         for i, layer in enumerate(self.transformer_layers):
             layer_cache = {"memory_keys": None, "memory_values": None}
             if isinstance(layer.self_attn, AverageAttention):
-                layer_cache["prev_g"] = torch.zeros((batch_size, 1, depth),
-                                                    device=memory_bank.device)
+                layer_cache["prev_g"] = torch.zeros(
+                    (batch_size, 1, depth), device=memory_bank.device
+                )
             else:
                 layer_cache["self_keys"] = None
                 layer_cache["self_values"] = None

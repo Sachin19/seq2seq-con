@@ -8,13 +8,15 @@ from copy import deepcopy
 
 
 def build_model_saver(model_opt, opt, model, fields, optim):
-    model_saver = ModelSaver(opt.save_model,
-                             model,
-                             model_opt,
-                             fields,
-                             optim,
-                             opt.keep_checkpoint,
-                             opt.train_only_sec_task)
+    model_saver = ModelSaver(
+        opt.save_model,
+        model,
+        model_opt,
+        fields,
+        optim,
+        opt.keep_checkpoint,
+        opt.train_only_sec_task,
+    )
     return model_saver
 
 
@@ -26,8 +28,16 @@ class ModelSaverBase(object):
     * `_rm_checkpoint
     """
 
-    def __init__(self, base_path, model, model_opt, fields, optim,
-                 keep_checkpoint=-1, only_sec=False):
+    def __init__(
+        self,
+        base_path,
+        model,
+        model_opt,
+        fields,
+        optim,
+        keep_checkpoint=-1,
+        only_sec=False,
+    ):
         self.base_path = base_path
         self.model = model
         self.model_opt = model_opt
@@ -60,8 +70,7 @@ class ModelSaverBase(object):
         self.last_saved_step = step
 
         if moving_average:
-            for param_data, param in zip(model_params_data,
-                                         save_model.parameters()):
+            for param_data, param in zip(model_params_data, save_model.parameters()):
                 param.data = param_data
 
         if self.keep_checkpoint > 0:
@@ -101,9 +110,14 @@ class ModelSaver(ModelSaverBase):
 
     def _save(self, step, model):
         model_state_dict = model.state_dict()
-        model_state_dict = {k: v for k, v in model_state_dict.items()
-                            if 'generator' not in k}
+        model_state_dict = {
+            k: v for k, v in model_state_dict.items() if "generator" not in k
+        }
+
         generator_state_dict = model.generator.state_dict()
+        tgt_out_emb_state_dict = None
+        if hasattr(model.decoder, "tgt_out_emb"):
+            tgt_out_emb_state_dict = model.decoder.tgt_out_emb.state_dict()
 
         mtl_generator_state_dict = None
         if model.mtl_generator is not None:
@@ -124,20 +138,21 @@ class ModelSaver(ModelSaverBase):
                     vocab[side].fields[0][1].vocab.stoi.pop(key, None)
 
         checkpoint = {
-            'model': model_state_dict,
-            'generator': generator_state_dict,
-            'mtl_generator': mtl_generator_state_dict,
-            'vocab': vocab,
-            'opt': self.model_opt,
-            'optim': self.optim.state_dict(),
+            "model": model_state_dict,
+            "generator": generator_state_dict,
+            "tgt_out_emb": tgt_out_emb_state_dict,
+            "mtl_generator": mtl_generator_state_dict,
+            "vocab": vocab,
+            "opt": self.model_opt,
+            "optim": self.optim.state_dict(),
         }
 
         if self.only_sec:
             logger.info("Saving checkpoint %s_sec_step_%d.pt" % (self.base_path, step))
-            checkpoint_path = '%s_sec_step_%d.pt' % (self.base_path, step)
+            checkpoint_path = "%s_sec_step_%d.pt" % (self.base_path, step)
         else:
             logger.info("Saving checkpoint %s_step_%d.pt" % (self.base_path, step))
-            checkpoint_path = '%s_step_%d.pt' % (self.base_path, step)
+            checkpoint_path = "%s_step_%d.pt" % (self.base_path, step)
         torch.save(checkpoint, checkpoint_path)
         return checkpoint, checkpoint_path
 

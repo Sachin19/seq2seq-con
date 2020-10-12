@@ -55,7 +55,8 @@ class DecodeStrategy(object):
 
     def __init__(self, pad, bos, eos, batch_size, parallel_paths,
                  min_length, block_ngram_repeat, exclusion_tokens,
-                 return_attention, max_length, sec_bos=None, multi_task=False, use_feat_emb=False):
+                 return_attention, max_length, sec_bos=None, multi_task=False, 
+                 use_feat_emb=False, use_new_target_vocab=False):
 
         # magic indices
         self.pad = pad
@@ -67,10 +68,14 @@ class DecodeStrategy(object):
         self.multi_task =  multi_task
         self.use_feat_emb = use_feat_emb
 
+        #new target vocab use
+        self.use_new_target_vocab = use_new_target_vocab
+
         self.batch_size = batch_size
         self.parallel_paths = parallel_paths
         # result caching
         self.predictions = [[] for _ in range(batch_size)]
+        self.new_predictions = [[] for _ in range(batch_size)]
         self.scores = [[] for _ in range(batch_size)]
         self.sec_scores = [[] for _ in range(batch_size)]
         self.attention = [[] for _ in range(batch_size)]
@@ -102,6 +107,10 @@ class DecodeStrategy(object):
         self.alive_seq = torch.full(
             [self.batch_size * self.parallel_paths, 1], self.bos,
             dtype=torch.long, device=device)
+        if self.use_new_target_vocab:
+            self.new_alive_seq = torch.full(
+                [self.batch_size * self.parallel_paths, 1], self.bos,
+                dtype=torch.long, device=device)
         self.is_finished = torch.zeros(
             [self.batch_size, self.parallel_paths],
             dtype=torch.uint8, device=device)

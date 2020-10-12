@@ -25,7 +25,7 @@ class TranslationBuilder(object):
     """
 
     def __init__(self, data, fields, n_best=1, replace_unk=False,
-                 has_tgt=False, phrase_table="", multi_task=False):
+                 has_tgt=False, phrase_table="", multi_task=False, use_new_target_vocab=False):
         self.data = data
         self.fields = fields
         self._has_text_src = isinstance(
@@ -35,10 +35,19 @@ class TranslationBuilder(object):
         self.phrase_table = phrase_table
         self.has_tgt = has_tgt
         self.multi_task = multi_task
+        self.use_new_target_vocab=use_new_target_vocab
 
-    def _build_target_tokens(self, src, src_vocab, src_raw, pred, attn):
-        tgt_field = dict(self.fields)["tgt"].base_field
-        vocab = tgt_field.vocab
+    def _build_target_tokens(self, src, src_vocab, src_raw, pred, attn, new_vocab=False, length=-1):
+        field_dict = dict(self.fields)
+        # if new_vocab:
+        #     print("new_tgt" in field_dict)
+        if new_vocab and "new_tgt" in field_dict:
+            tgt_field = field_dict['new_tgt']
+            vocab = tgt_field.vocab
+        else:
+            tgt_field = field_dict["tgt"].base_field
+            vocab = tgt_field.vocab
+            
         tokens = []
         for tok in pred:
             if tok < len(vocab):
@@ -48,7 +57,11 @@ class TranslationBuilder(object):
             if tokens[-1] == tgt_field.eos_token:
                 tokens = tokens[:-1]
                 break
-        if self.replace_unk and attn is not None and src is not None:
+        
+        if length > -1:
+            tokens = tokens[:length]
+
+        if self.replace_unk and attn is not None and src is not None and len(src_raw) > 0:
             for i in range(len(tokens)):
                 if tokens[i] == tgt_field.unk_token:
                     _, max_index = attn[i][:len(src_raw)].max(0)
@@ -90,8 +103,10 @@ class TranslationBuilder(object):
                len(translation_batch["predictions"]))
         batch_size = batch.batch_size
 
-        preds, pred_score, attn, align, gold_score, sec_preds, indices = list(zip(
+        preds, new_preds, new_tgt_preds, pred_score, attn, align, gold_score, sec_preds, indices = list(zip(
             *sorted(zip(translation_batch["predictions"],
+                        translation_batch["new_predictions"],
+                        translation_batch["new_tgt_predictions"],
                         translation_batch["scores"],
                         translation_batch["attention"],
                         translation_batch["alignment"],
@@ -130,12 +145,30 @@ class TranslationBuilder(object):
                 src_vocab, src_raw,
                 preds[b][n], attn[b][n])
                 for n in range(self.n_best)]
+
+            new_pred_sents = None
+            if self.use_new_target_vocab:
+                new_pred_sents = [self._build_target_tokens(
+                    src[:, b] if src is not None else None,
+                    src_vocab, src_raw,
+                    new_preds[b][n], attn[b][n], new_vocab=True)
+                    for n in range(self.n_best)]
+
             gold_sent = None
+            new_tgt_sent = None
             if tgt is not None:
                 gold_sent = self._build_target_tokens(
                     src[:, b] if src is not None else None,
                     src_vocab, src_raw,
                     tgt[1:, b] if tgt is not None else None, None)
+                
+                new_tgt_sent = None
+                if new_tgt_preds is not None:
+                    new_tgt_sent = self._build_target_tokens(
+                        src[:, b] if src is not None else None,
+                        src_vocab, src_raw,
+                        new_tgt_preds[b], None, new_vocab=True, length=len(gold_sent))
+
             gold_sec_sent = None
             sec_pred_sents = None
 
@@ -150,9 +183,13 @@ class TranslationBuilder(object):
                     # print(sec_pred_sents)
                     # input()
 
+            # print(pred_sents)
+            # print(new_tgt_sent)
+            # print(gold_sent)
+            # input()
             translation = Translation(
                 src[:, b] if src is not None else None,
-                src_raw, pred_sents, attn[b], pred_score[b],
+                src_raw, pred_sents, new_pred_sents, new_tgt_sent, attn[b], pred_score[b],
                 gold_sent, gold_score[b], align[b], gold_sec_sent, sec_pred_sents,
             )
             translations.append(translation)
@@ -176,14 +213,16 @@ class Translation(object):
             each translation.
     """
 
-    __slots__ = ["src", "src_raw", "pred_sents", "attns", "pred_scores",
+    __slots__ = ["src", "src_raw", "pred_sents", "new_pred_sents", "new_tgt_sent", "attns", "pred_scores",
                  "gold_sent", "gold_score", "word_aligns", "gold_sec_sent", "sec_pred_sents"]
 
-    def __init__(self, src, src_raw, pred_sents,
+    def __init__(self, src, src_raw, pred_sents, new_pred_sents, new_tgt_sent,
                  attn, pred_scores, tgt_sent, gold_score, word_aligns, gold_sec_sent, sec_pred_sents):
         self.src = src
         self.src_raw = src_raw
         self.pred_sents = pred_sents
+        self.new_pred_sents = new_pred_sents
+        self.new_tgt_sent = new_tgt_sent
         self.attns = attn
         self.pred_scores = pred_scores
         self.gold_sent = tgt_sent
@@ -202,6 +241,15 @@ class Translation(object):
         best_score = self.pred_scores[0]
         pred_sent = ' '.join(best_pred)
         msg.append('PRED {}: {}\n'.format(sent_number, pred_sent))
+
+        if self.new_pred_sents is not None:
+            new_best_pred = self.new_pred_sents[0]
+            new_pred_sent = ' '.join(new_best_pred)
+            msg.append('NEW_PRED {}: {}\n'.format(sent_number, new_pred_sent))
+
+        if self.new_tgt_sent is not None:
+            new_tgt_sent = ' '.join(self.new_tgt_sent)
+            msg.append('NEW_TGT_PRED {}: {}\n'.format(sent_number, new_tgt_sent))
         msg.append("PRED SCORE: {:.4f}\n".format(best_score))
 
         if self.word_aligns is not None:

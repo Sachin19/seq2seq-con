@@ -82,11 +82,13 @@ class GreedySearch(DecodeStrategy):
 
     def __init__(self, pad, bos, eos, batch_size, min_length,
                  block_ngram_repeat, exclusion_tokens, return_attention,
-                 max_length, sampling_temp, keep_topk, sec_bos, multi_task, use_feat_emb=False):
+                 max_length, sampling_temp, keep_topk, sec_bos, multi_task, 
+                 use_feat_emb, use_new_target_vocab):
         assert block_ngram_repeat == 0
         super(GreedySearch, self).__init__(
             pad, bos, eos, batch_size, 1, min_length, block_ngram_repeat,
-            exclusion_tokens, return_attention, max_length, sec_bos, multi_task, use_feat_emb=use_feat_emb  )
+            exclusion_tokens, return_attention, max_length, sec_bos, multi_task,
+            use_feat_emb, use_new_target_vocab)
         self.sampling_temp = sampling_temp
         self.keep_topk = keep_topk
         self.topk_scores = None
@@ -130,7 +132,7 @@ class GreedySearch(DecodeStrategy):
     def batch_offset(self):
         return self.select_indices
 
-    def advance(self, log_probs, attn, pos_log_probs=None):
+    def advance(self, log_probs, new_log_probs, attn, pos_log_probs=None):
         """Select next tokens randomly from the top k possible next tokens.
 
         Args:
@@ -147,10 +149,15 @@ class GreedySearch(DecodeStrategy):
         self.block_ngram_repeats(log_probs)
         topk_ids, self.topk_scores = sample_with_temperature(
             log_probs, self.sampling_temp, self.keep_topk)
-
+        
         self.is_finished = topk_ids.eq(self.eos)
 
         self.alive_seq = torch.cat([self.alive_seq, topk_ids], -1)
+
+        if self.use_new_target_vocab:
+            new_topk_ids, self.new_topk_scores = sample_with_temperature(
+                new_log_probs, self.sampling_temp, self.keep_topk)
+            self.new_alive_seq = torch.cat([self.new_alive_seq, new_topk_ids], -1)
 
         #pos
         if self.multi_task:
@@ -176,6 +183,8 @@ class GreedySearch(DecodeStrategy):
             self.attention[b_orig].append(
                 self.alive_attn[:, b, :self.memory_lengths[b]]
                 if self.alive_attn is not None else [])
+            if self.use_new_target_vocab:
+                self.new_predictions[b_orig].append(self.new_alive_seq[b, 1:])
             if self.multi_task:
                 self.sec_predictions[b_orig].append(self.alive_sec_seq[b, 1:])
         self.done = self.is_finished.all()
@@ -183,6 +192,8 @@ class GreedySearch(DecodeStrategy):
             return
         is_alive = ~self.is_finished.view(-1)
         self.alive_seq = self.alive_seq[is_alive]
+        if self.use_new_target_vocab:
+            self.new_alive_seq = self.new_alive_seq[is_alive]
         if self.multi_task:
             self.alive_sec_seq = self.alive_sec_seq[is_alive]
         if self.alive_attn is not None:

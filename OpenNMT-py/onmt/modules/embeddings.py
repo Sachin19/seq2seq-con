@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 from onmt.modules.util_class import Elementwise
+from onmt.modules import AdapterLayer
 
 
 class PositionalEncoding(nn.Module):
@@ -21,17 +22,20 @@ class PositionalEncoding(nn.Module):
 
     def __init__(self, dropout, dim, max_len=5000):
         if dim % 2 != 0:
-            raise ValueError("Cannot use sin/cos positional encoding with "
-                             "odd dim (got dim={:d})".format(dim))
+            raise ValueError(
+                "Cannot use sin/cos positional encoding with "
+                "odd dim (got dim={:d})".format(dim)
+            )
         pe = torch.zeros(max_len, dim)
         position = torch.arange(0, max_len).unsqueeze(1)
-        div_term = torch.exp((torch.arange(0, dim, 2, dtype=torch.float) *
-                             -(math.log(10000.0) / dim)))
+        div_term = torch.exp(
+            (torch.arange(0, dim, 2, dtype=torch.float) * -(math.log(10000.0) / dim))
+        )
         pe[:, 0::2] = torch.sin(position.float() * div_term)
         pe[:, 1::2] = torch.cos(position.float() * div_term)
         pe = pe.unsqueeze(1)
         super(PositionalEncoding, self).__init__()
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
         self.dropout = nn.Dropout(p=dropout)
         self.dim = dim
 
@@ -47,7 +51,7 @@ class PositionalEncoding(nn.Module):
 
         emb = emb * math.sqrt(self.dim)
         if step is None:
-            emb = emb + self.pe[:emb.size(0)]
+            emb = emb + self.pe[: emb.size(0)]
         else:
             emb = emb + self.pe[step]
         emb = self.dropout(emb)
@@ -55,10 +59,7 @@ class PositionalEncoding(nn.Module):
 
 
 class VecEmbedding(nn.Module):
-    def __init__(self, vec_size,
-                 emb_dim,
-                 position_encoding=False,
-                 dropout=0):
+    def __init__(self, vec_size, emb_dim, position_encoding=False, dropout=0):
         super(VecEmbedding, self).__init__()
         self.embedding_size = emb_dim
         self.proj = nn.Linear(vec_size, emb_dim, bias=False)
@@ -126,22 +127,31 @@ class Embeddings(nn.Module):
         dropout (float): dropout probability.
     """
 
-    def __init__(self, word_vec_size,
-                 word_vocab_size,
-                 word_padding_idx,
-                 position_encoding=False,
-                 feat_merge="concat",
-                 feat_vec_exponent=0.7,
-                 feat_vec_size=-1,
-                 feat_padding_idx=[],
-                 feat_vocab_sizes=[],
-                 dropout=0,
-                 sparse=False,
-                 fix_word_vecs=False,
-                 tie_embeddings=False,
-                 out_vec_size=None): 
-        self._validate_args(feat_merge, feat_vocab_sizes, feat_vec_exponent,
-                            feat_vec_size, feat_padding_idx)
+    def __init__(
+        self,
+        word_vec_size,
+        word_vocab_size,
+        word_padding_idx,
+        position_encoding=False,
+        feat_merge="concat",
+        feat_vec_exponent=0.7,
+        feat_vec_size=-1,
+        feat_padding_idx=[],
+        feat_vocab_sizes=[],
+        dropout=0,
+        sparse=False,
+        fix_word_vecs=False,
+        tie_embeddings=False,
+        out_vec_size=None,
+        adapt_embeddings=False,
+    ):
+        self._validate_args(
+            feat_merge,
+            feat_vocab_sizes,
+            feat_vec_exponent,
+            feat_vec_size,
+            feat_padding_idx,
+        )
 
         if feat_padding_idx is None:
             feat_padding_idx = []
@@ -156,37 +166,59 @@ class Embeddings(nn.Module):
 
         # Dimensions and padding for feature embedding matrices
         # (these have no effect if feat_vocab_sizes is empty)
-        if feat_merge == 'sum':
+        if feat_merge == "sum":
             feat_dims = [word_vec_size] * len(feat_vocab_sizes)
         elif feat_vec_size > 0:
             feat_dims = [feat_vec_size] * len(feat_vocab_sizes)
         else:
-            feat_dims = [int(vocab ** feat_vec_exponent)
-                         for vocab in feat_vocab_sizes]
+            feat_dims = [int(vocab ** feat_vec_exponent) for vocab in feat_vocab_sizes]
         vocab_sizes.extend(feat_vocab_sizes)
         emb_dims.extend(feat_dims)
         pad_indices.extend(feat_padding_idx)
 
         # The embedding matrix look-up tables. The first look-up table
         # is for words. Subsequent ones are for features, if any exist.
+        self.adapt_embeddings = adapt_embeddings
+        word_embedding = []
         if tie_embeddings:
-            word_embedding = nn.Sequential(
-                                nn.Embedding(vocab_sizes[0], out_vec_size, padding_idx=pad_indices[0], sparse=sparse),
-                                nn.Linear(out_vec_size, emb_dims[0]))
+            word_embedding.append(
+                nn.Embedding(
+                    vocab_sizes[0],
+                    out_vec_size,
+                    padding_idx=pad_indices[0],
+                    sparse=sparse,
+                )
+            )
+            if self.adapt_embeddings:
+                word_embedding.append(AdapterLayer(out_vec_size, 0, 0.0))
+            word_embedding.append(nn.Linear(out_vec_size, emb_dims[0], bias=False))
+
         else:
-            word_embedding = nn.Sequential(nn.Embedding(vocab_sizes[0], emb_dims[0], padding_idx=pad_indices[0], sparse=sparse))
+            word_embedding = [
+                nn.Embedding(
+                    vocab_sizes[0],
+                    emb_dims[0],
+                    padding_idx=pad_indices[0],
+                    sparse=sparse,
+                )
+            ]
+            if self.adapt_embeddings:
+                word_embedding.append(AdapterLayer(emb_dims[0], 0, 0.0))
+
+        word_embedding = nn.Sequential(*word_embedding)
 
         emb_params = zip(vocab_sizes[1:], emb_dims[1:], pad_indices[1:])
-        embeddings = [word_embedding] + [nn.Embedding(vocab, dim, padding_idx=pad, sparse=sparse) 
-                                            for vocab, dim, pad in emb_params]
+        embeddings = [word_embedding] + [
+            nn.Embedding(vocab, dim, padding_idx=pad, sparse=sparse)
+            for vocab, dim, pad in emb_params
+        ]
         emb_luts = Elementwise(feat_merge, embeddings)
 
         # The final output size of word + feature vectors. This can vary
         # from the word vector size if and only if features are defined.
         # This is the attribute you should access if you need to know
         # how big your embeddings are going to be.
-        self.embedding_size = (sum(emb_dims) if feat_merge == 'concat'
-                               else word_vec_size)
+        self.embedding_size = sum(emb_dims) if feat_merge == "concat" else word_vec_size
 
         # The sequence of operations that converts the input sequence
         # into a sequence of embeddings. At minimum this consists of
@@ -195,53 +227,73 @@ class Embeddings(nn.Module):
         # additional operations as well.
         super(Embeddings, self).__init__()
         self.make_embedding = nn.Sequential()
-        self.make_embedding.add_module('emb_luts', emb_luts)
+        self.make_embedding.add_module("emb_luts", emb_luts)
 
-        if feat_merge == 'mlp' and len(feat_vocab_sizes) > 0:
+        if feat_merge == "mlp" and len(feat_vocab_sizes) > 0:
             in_dim = sum(emb_dims)
             mlp = nn.Sequential(nn.Linear(in_dim, word_vec_size), nn.ReLU())
-            self.make_embedding.add_module('mlp', mlp)
+            self.make_embedding.add_module("mlp", mlp)
 
         self.position_encoding = position_encoding
 
         if self.position_encoding:
             pe = PositionalEncoding(dropout, self.embedding_size)
-            self.make_embedding.add_module('pe', pe)
+            self.make_embedding.add_module("pe", pe)
 
         if fix_word_vecs:
             self.word_lut.weight.requires_grad = False
 
-    def _validate_args(self, feat_merge, feat_vocab_sizes, feat_vec_exponent,
-                       feat_vec_size, feat_padding_idx):
+    def _validate_args(
+        self,
+        feat_merge,
+        feat_vocab_sizes,
+        feat_vec_exponent,
+        feat_vec_size,
+        feat_padding_idx,
+    ):
         if feat_merge == "sum":
             # features must use word_vec_size
             if feat_vec_exponent != 0.7:
-                warnings.warn("Merging with sum, but got non-default "
-                              "feat_vec_exponent. It will be unused.")
+                warnings.warn(
+                    "Merging with sum, but got non-default "
+                    "feat_vec_exponent. It will be unused."
+                )
             if feat_vec_size != -1:
-                warnings.warn("Merging with sum, but got non-default "
-                              "feat_vec_size. It will be unused.")
+                warnings.warn(
+                    "Merging with sum, but got non-default "
+                    "feat_vec_size. It will be unused."
+                )
         elif feat_vec_size > 0:
             # features will use feat_vec_size
             if feat_vec_exponent != -1:
-                warnings.warn("Not merging with sum and positive "
-                              "feat_vec_size, but got non-default "
-                              "feat_vec_exponent. It will be unused.")
+                warnings.warn(
+                    "Not merging with sum and positive "
+                    "feat_vec_size, but got non-default "
+                    "feat_vec_exponent. It will be unused."
+                )
         else:
             if feat_vec_exponent <= 0:
-                raise ValueError("Using feat_vec_exponent to determine "
-                                 "feature vec size, but got feat_vec_exponent "
-                                 "less than or equal to 0.")
+                raise ValueError(
+                    "Using feat_vec_exponent to determine "
+                    "feature vec size, but got feat_vec_exponent "
+                    "less than or equal to 0."
+                )
         n_feats = len(feat_vocab_sizes)
         if n_feats != len(feat_padding_idx):
-            raise ValueError("Got unequal number of feat_vocab_sizes and "
-                             "feat_padding_idx ({:d} != {:d})".format(
-                                n_feats, len(feat_padding_idx)))
+            raise ValueError(
+                "Got unequal number of feat_vocab_sizes and "
+                "feat_padding_idx ({:d} != {:d})".format(n_feats, len(feat_padding_idx))
+            )
 
     @property
     def word_lut(self):
         """Word look-up table."""
         return self.make_embedding[0][0][0]
+
+    @property
+    def word_adapter(self):
+        """adapter layer look-up table."""
+        return self.make_embedding[0][0][1]
 
     @property
     def emb_luts(self):
@@ -261,15 +313,17 @@ class Embeddings(nn.Module):
             if self.word_vec_size > pretrained_vec_size:
                 self.word_lut.weight.data[:, :pretrained_vec_size] = pretrained
             elif self.word_vec_size < pretrained_vec_size:
-                self.word_lut.weight.data \
-                    .copy_(pretrained[:, :self.word_vec_size])
+                self.word_lut.weight.data.copy_(pretrained[:, : self.word_vec_size])
             else:
                 self.word_lut.weight.data.copy_(pretrained)
-    
+
     def tie_embeddings(self, tgt_out_vec):
-        #tie the embeddings with the output vectors and freeze them
+        # tie the embeddings with the output vectors and freeze them
         self.word_lut.weight.data.copy_(tgt_out_vec.data)
-        self.word_lut.weight.requires_grad = False  
+        self.word_lut.weight.requires_grad = False
+
+    def tie_adapters(self, out_adapt):
+        self.word_adapter.weight.copy_(out_adapt.weight)  # might need debugging
 
     def forward(self, source, step=None):
         """Computes the embeddings for words and features.
@@ -294,4 +348,4 @@ class Embeddings(nn.Module):
 
     def update_dropout(self, dropout):
         if self.position_encoding:
-            self._modules['make_embedding'][1].dropout.p = dropout
+            self._modules["make_embedding"][1].dropout.p = dropout

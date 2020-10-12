@@ -3,6 +3,8 @@ This includes: LossComputeBase and the standard NMTLossCompute, and
                sharded loss compute stuff.
 """
 from __future__ import division
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -66,9 +68,14 @@ def build_loss_compute(model, tgt_field, opt, train=True):
         compute.to(device)
     
     else: #continuous loss functions
+        second_target_embeddings = None
+        if hasattr(model.decoder, 'new_tgt_out_emb') and opt.use_two_tgt_vocab:
+            second_target_embeddings = model.decoder.new_tgt_out_emb
+
         compute = ContinuousLossCompute(
                 generator=model.generator, 
                 target_embeddings=model.decoder.tgt_out_emb, 
+                second_target_embeddings=model.decoder.new_tgt_out_emb,
                 mtl_generator=model.mtl_generator,
                 loss_type=opt.loss, 
                 ignore_index=padding_idx,
@@ -76,10 +83,10 @@ def build_loss_compute(model, tgt_field, opt, train=True):
                 lambda_coverage=opt.lambda_coverage,
                 lambda_align=opt.lambda_align,
                 lambda_vmf=opt.lambda_vmf,
-                lambda_mtl=opt.lambda_mtl)
+                lambda_mtl=opt.lambda_mtl,
+                beta_map=opt.beta_map if opt.emb_map == "orthogonal" else 0.)
 
     return compute
-
 
 class LossComputeBase(nn.Module):
     """
@@ -371,17 +378,19 @@ class ContinuousLossCompute(LossComputeBase):
 
     def __init__(self, generator, target_embeddings, mtl_generator=None, 
                 loss_type='nllvmf', ignore_index=0, approximate_vmf=False, normalization="sents", 
-                lambda_coverage=0.0, lambda_mtl=0.0, lambda_align=0.0, lambda_vmf=0.2):
+                lambda_coverage=0.0, lambda_mtl=0.0, lambda_align=0.0, lambda_vmf=0.2, beta_map=0.001, second_target_embeddings=None):
         super(ContinuousLossCompute, self).__init__(None, generator)
         self.mtl_generator = mtl_generator
         self.loss_type = loss_type
         self.ignore_index = ignore_index
         self.target_embeddings = target_embeddings
+        self.second_target_embeddings = second_target_embeddings
         self.approximate_vmf = approximate_vmf
         self.lambda_coverage = lambda_coverage
         self.lambda_align = lambda_align
         self.lambda_vmf = lambda_vmf
         self.lambda_mtl = lambda_mtl
+        self.beta_map = beta_map
 
         if self.mtl_generator is not None:
             self.mtl_criterion = nn.NLLLoss(ignore_index=0, reduction='sum')
@@ -390,6 +399,21 @@ class ContinuousLossCompute(LossComputeBase):
     def padding_idx(self):
         return self.ignore_index
     
+    def _psd(self, output_emb, target_emb, mask): # power spherical distribution loss
+        kappa = output_emb.norm(p=2, dim=-1)
+        emb_size = output_emb.size(-1)
+        
+        output_emb_unitnorm = torch.nn.functional.normalize(output_emb, p=2, dim=-1)
+        target_emb_unitnorm = torch.nn.functional.normalize(target_emb, p=2, dim=-1)
+        cosine_loss = (1.0 - (output_emb_unitnorm * target_emb_unitnorm).sum(dim=-1)).masked_select(mask).sum()
+        
+        beta = (emb_size - 1)/2.
+        alpha = beta + kappa
+        loss = - kappa * torch.log(1. + (output_emb_unitnorm * target_emb_unitnorm).sum(dim=-1)) + (alpha + beta) * np.log(2.) + torch.lgamma(alpha) - torch.lgamma(alpha + beta) 
+
+        loss = loss.masked_select(mask).sum()
+        return loss, cosine_loss, None  # scores
+   
     def _nllvmf(self, output_emb, target_emb, mask): #unnormalized output_emb
         #approximation of LogC(m, k)
         def logcmkappox(z, d):
@@ -400,21 +424,19 @@ class ContinuousLossCompute(LossComputeBase):
         kappa = output_emb.norm(p=2, dim=-1)
         emb_size = output_emb.size(-1)
 
-        target_emb_unitnorm = torch.nn.functional.normalize(target_emb, p=2, dim=-1)
         output_emb_unitnorm = torch.nn.functional.normalize(output_emb, p=2, dim=-1)
-
+        target_emb_unitnorm = torch.nn.functional.normalize(target_emb, p=2, dim=-1)
         cosine_loss = (1.0 - (output_emb_unitnorm * target_emb_unitnorm).sum(dim=-1)).masked_select(mask).sum()
-        # scores = output_emb_unitnorm.matmul(self.target_embeddings.weight.t())
+        
         lambda2 = 0.1
         lambda1 = 0.02
-        # nll_loss = - logcmk(kappa) + kappa*(lambda2-lambda1*(out_vec_norm_t*tar_vec_norm_t).sum(dim=-1))
+        
         if self.approximate_vmf:
             nll_loss = logcmkappox(kappa, emb_size) + torch.log(1 + kappa) * (self.lambda_vmf - (output_emb_unitnorm * target_emb_unitnorm).sum(dim=-1))
         else:
             nll_loss = - logcmk(kappa) + torch.log(1 + kappa) * (self.lambda_vmf - (output_emb_unitnorm * target_emb_unitnorm).sum(dim=-1))
-        # targets.view(-1).ne(padding_token)
+
         loss = nll_loss.masked_select(mask).sum()
-        # num_tokens = targets.ne(padding_token).float().sum()
         return loss, cosine_loss, None  # scores
 
     def _cosine(self, output_emb, target_emb, mask):
@@ -424,14 +446,16 @@ class ContinuousLossCompute(LossComputeBase):
         output_emb_unitnorm = torch.nn.functional.normalize(output_emb, p=2, dim=-1)
 
         cosine_loss = (1.0 - (output_emb_unitnorm * target_emb_unitnorm).sum(dim=-1)).masked_select(mask).sum()
-        return loss, cosine_loss 
+        return cosine_loss, cosine_loss 
     
-    def _l2(self, output_emb, target_emb, mask):
+    def _l2(self, output_emb, target_emb, mask, normalize=True):            
         target_emb_unitnorm = torch.nn.functional.normalize(target_emb, p=2, dim=-1)
         output_emb_unitnorm = torch.nn.functional.normalize(output_emb, p=2, dim=-1)
-
         cosine_loss = (1.0 - (output_emb_unitnorm * target_emb_unitnorm).sum(dim=-1)).masked_select(mask).sum()
-        diff = (output_emb - target_emb)
+        if normalize:
+            diff = (output_emb_unitnorm - target_emb_unitnorm)
+        else:
+            diff = (output_emb - target_emb)
         l2_loss = (diff * diff).sum(dim=-1).masked_select(mask).sum()
         return l2_loss, cosine_loss 
 
@@ -484,6 +508,20 @@ class ContinuousLossCompute(LossComputeBase):
             })
         return shard_state
 
+    def orthogonalize_mapping(self):
+        self.target_embeddings[-1].orthogonalize(self.beta_map)
+    
+    def _get_loss(self, output_emb, target_emb, gtruth):
+        if self.loss_type == 'nllvmf':
+            loss, cosine_loss, scores = self._nllvmf(output_emb, target_emb, gtruth.ne(self.padding_idx))
+        elif self.loss_type == 'cosine':
+            loss, cosine_loss = self._cosine(output_emb, target_emb, gtruth.ne(self.padding_idx))
+        elif self.loss_type == 'l2':
+            loss, cosine_loss = self._l2(output_emb, target_emb, gtruth.ne(self.padding_idx), normalize=False)
+        elif self.loss_type == 'psd':
+            loss, cosine_loss, scores = self._psd(output_emb, target_emb, gtruth.ne(self.padding_idx))
+        return loss, cosine_loss
+
     def _compute_loss(self, batch, output, target, target_other_task=None, std_attn=None,
                       coverage_attn=None, align_head=None, ref_align=None):
 
@@ -492,13 +530,22 @@ class ContinuousLossCompute(LossComputeBase):
 
         gtruth = target.view(-1)
         target_emb = self.target_embeddings(gtruth)
+        # reverse_emb = self.target_embeddings[-1].reverse(target_emb)
+        # original_emb = self.target_embeddings[0](gtruth)
 
-        if self.loss_type == 'nllvmf':
-            loss, cosine_loss, scores = self._nllvmf(output_emb, target_emb, gtruth.ne(self.padding_idx))
-        elif self.loss_type == 'cosine':
-            loss, cosine_loss = self._cosine(output_emb, target_emb, gtruth.ne(self.padding_idx))
-        elif self.loss_type == 'l2':
-            loss, cosine_loss = self._l2(output_emb, target_emb, gtruth.ne(self.padding_idx))
+        # print(target_emb[0], reverse_emb[0], original_emb[0])
+        # print(reverse_emb[0] - original_emb[0])
+        # # input(target_emb[0])
+        # input()
+        loss, cosine_loss = self._get_loss(output_emb, target_emb, gtruth)
+
+        if self.second_target_embeddings is not None:
+            sec_target_emb = self.second_target_embeddings(gtruth) # the indices of the two vocabularies correspond to (approximate) translations
+            sec_loss, sec_cosine_loss = self._get_loss(output_emb, sec_target_emb, gtruth)
+
+            loss = (loss + sec_loss) / 2
+            cosine_loss = (cosine_loss + sec_cosine_loss) / 2
+        
         # loss = self.criterion(scores, gtruth)
 
         other_task_loss_for_stats = None

@@ -4,7 +4,7 @@ from __future__ import unicode_literals, print_function
 import torch
 from onmt.inputters.text_dataset import TextMultiField
 from onmt.utils.alignment import build_align_pharaoh
-
+import copy
 import re
 
 def isNumeral(s): 
@@ -12,6 +12,10 @@ def isNumeral(s):
     if len(x) >= 1:
         return True
     return False
+
+def cleanphrase(phrase):
+    phraseitems = phrase.split("&#32;")
+    return " ".join(phraseitems)
 
 class TranslationBuilder2(object):
     """
@@ -30,7 +34,7 @@ class TranslationBuilder2(object):
     """
 
     def __init__(self, data, fields, n_best=1, replace_unk=False,
-                 has_tgt=False, phrase_table="", multi_task=False):
+                 has_tgt=False, phrase_table="", multi_task=False, replace_table=""):
         self.data = data
         self.fields = fields
         self._has_text_src = isinstance(
@@ -49,6 +53,28 @@ class TranslationBuilder2(object):
                     for l in f:
                         k, v = l.strip().split("|||")
                         self.lookup_dict[k] = v
+        
+        if replace_table != "":
+            self.replace_dict = {}
+            with open(replace_table) as f:
+                c = 0
+                fl = False
+                for l in f:
+                    items = l.strip().split("\t")
+                    if len(items) < 2:
+                        if items[0] in self.replace_dict:
+                            c += 1
+                        self.replace_dict[cleanphrase(items[0])] = (cleanphrase(items[0]), 1.0)
+                    elif len(items) == 2:
+                        self.replace_dict[cleanphrase(items[0])] = (cleanphrase(items[1].split()[0]), 1.0)
+                    else:
+                        fl=True
+                        self.replace_dict[cleanphrase(items[0])] = (cleanphrase(items[1].split()[0]), float(items[2].split()[0]))
+                print(len(self.replace_dict))
+                print("additional words =",c)
+                if fl:
+                    print("yes")
+
                     
         self.has_tgt = has_tgt
         self.multi_task = multi_task
@@ -57,14 +83,18 @@ class TranslationBuilder2(object):
         tgt_field = dict(self.fields)["tgt"].base_field
         vocab = tgt_field.vocab
         tokens = []
+        replaced_tokens = []
         for tok in pred:
             if tok < len(vocab):
                 tokens.append(vocab.itos[tok])
             else:
                 tokens.append(src_vocab.itos[tok - len(vocab)])
+
             if tokens[-1] == tgt_field.eos_token:
                 tokens = tokens[:-1]
                 break
+        
+        old_tokens = copy.deepcopy(tokens)
         if self.replace_unk and attn is not None and src is not None:
             # print("YASSS")
             # input()
@@ -145,6 +175,63 @@ class TranslationBuilder2(object):
                         mI = max_index.item()
                     if src_raw[mI] == "Prozent":
                         tokens[i] = "percent"
+
+        if self.replace_dict is not None:
+            i=0
+            while i < len(old_tokens):
+                f=False
+                maxscore=-10
+                replacement = ""
+                if i+3 <= len(old_tokens) and " ".join(old_tokens[i:i+3]) in self.replace_dict:
+                    new_item, score = self.replace_dict[" ".join(old_tokens[i:i+3])]
+                    if maxscore < score:
+                        maxscore = score
+                        replacement = new_item.split()
+                        # replacement = ["_".join(new_item.split())]
+                        # replacement = ["_".join(old_tokens[i:i+3])]
+                        increment = 3
+                
+                if i+2 <= len(old_tokens) and " ".join(old_tokens[i:i+2]) in self.replace_dict:
+                    new_item, score = self.replace_dict[" ".join(old_tokens[i:i+2])]
+                    if maxscore < score:
+                        maxscore = score
+                        replacement = new_item.split()
+                        # replacement = ["_".join(new_item.split())]
+                        # replacement = ["_".join(old_tokens[i:i+2])]
+                        increment = 2
+                
+                if old_tokens[i] != tgt_field.unk_token and not isNumeral(old_tokens[i]) and old_tokens[i] in self.replace_dict:
+                    new_item, score = self.replace_dict[old_tokens[i]]
+                    if maxscore < score:
+                        replacement = new_item.split()
+                        increment = 1
+                        maxscore = score
+                else:
+                    maxscore = 100.
+                    replacement = [tokens[i]]
+                    increment = 1
+               
+                # elif i+2 <= len(old_tokens) and " ".join(old_tokens[i:i+2]) in self.replace_dict:
+                #     new_item = self.replace_dict[" ".join(old_tokens[i:i+2])].split()
+                #     replaced_tokens += new_item
+                #     i += 2
+                #     f=True
+                
+                # elif old_tokens[i] != tgt_field.unk_token and not isNumeral(old_tokens[i]) and old_tokens[i] in self.replace_dict:
+                #     new_item = [self.replace_dict[old_tokens[i]]]
+                #     replaced_tokens += new_item
+                #     i += 1
+                # else:
+                #     replaced_tokens.append(tokens[i])
+                #     i+=1
+
+                i += increment
+                replaced_tokens += replacement                
+                # if f:
+                #     print("yasss", i, tokens, replaced_tokens)
+                #     input()
+            tokens = replaced_tokens
+
         return tokens
     
     def _build_sec_target_tokens(self, sec_pred, base_tokens):
