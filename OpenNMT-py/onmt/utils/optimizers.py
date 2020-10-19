@@ -9,8 +9,12 @@ from math import sqrt
 import types
 import importlib
 import math
+import numpy as np
 from onmt.utils.misc import fn_args
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 def build_torch_optimizer(model, opt):
     """Builds the PyTorch optimizer.
@@ -34,8 +38,7 @@ def build_torch_optimizer(model, opt):
       A ``torch.optim.Optimizer`` instance.
     """
     params = [p for p in model.parameters() if p.requires_grad]
-
-    if opt.finetune and opt.train_only_adapters:
+    if opt.finetune == "adapter" and opt.train_only_adapters:
         params = np.array(list(model.named_parameters()))
         zero_grad_mask = []
         for x in params:
@@ -48,9 +51,12 @@ def build_torch_optimizer(model, opt):
         zero_grad_mask = np.array(zero_grad_mask)
         params = params[~zero_grad_mask]
 
+        params = [{'params': [p for n, p in params]}]
+        logger.info(sum(torch.numel(p) for p in params[0]['params']))
+
     betas = [opt.adam_beta1, opt.adam_beta2]
     if opt.optim == "sgd":
-        optimizer = optim.SGD(params, lr=opt.learning_rate)
+        optimizer = optim.SGD(list(params), lr=opt.learning_rate)
     elif opt.optim == "adagrad":
         optimizer = optim.Adagrad(
             params,

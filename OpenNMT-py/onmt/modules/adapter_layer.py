@@ -16,16 +16,18 @@ class AdapterLayer(nn.Module):
     def __init__(self, d_model, d_ff=0, dropout=0.1):
         super(AdapterLayer, self).__init__()
         self.d_ff = d_ff
-        self.adapter_w_1 = nn.Linear(d_model, d_ff)
+        self.adapter_w_1 = nn.Linear(d_model, d_ff if d_ff>0 else d_model)
         self.adapter_w_2 = nn.Identity()
         if d_ff > 0:
-            self.w_2 = nn.Linear(d_ff, d_model)
+            self.adapter_w_2 = nn.Linear(d_ff, d_model)
         self.adapter_layer_norm = nn.LayerNorm(d_model, eps=1e-6)
         self.adapter_dropout_1 = nn.Dropout(dropout)
         self.adapter_relu = nn.ReLU()
         self.adapter_dropout_2 = nn.Identity()
         if d_ff > 0:
             self.adapter_dropout_2 = nn.Dropout(dropout)
+        
+        self.initialize()
 
     def forward(self, x):
         """Layer definition.
@@ -47,3 +49,7 @@ class AdapterLayer(nn.Module):
         self.adapter_dropout_1.p = adapter_dropout
         if self.d_ff > 0:
             self.adapter_dropout_2.p = adapter_dropout
+    
+    def initialize(self):
+        pass
+

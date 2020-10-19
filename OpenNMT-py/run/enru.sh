@@ -1,11 +1,11 @@
 source activate gans
 #currently running=null
-SAVEDIR='logs/enru.2'
+SAVEDIR='logs/enru.vmf'
 export CUDA_VISIBLE_DEVICES=0,1
 export THC_CACHING_ALLOCATOR=0
 mkdir -p $SAVEDIR
 python -u train.py\
-    -data ../../kumarvon2018-data/enru/onmt/data\
+    -data ../../kumarvon2018-data/enru/conmt300/data\
     -save_model $SAVEDIR/model\
     -layers 6\
     -rnn_size 512\

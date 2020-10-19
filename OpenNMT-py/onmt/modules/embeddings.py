@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 
 from onmt.modules.util_class import Elementwise
-from onmt.modules import AdapterLayer
+from onmt.modules.adapter_layer import AdapterLayer
 
 
 class PositionalEncoding(nn.Module):
@@ -206,7 +206,6 @@ class Embeddings(nn.Module):
                 word_embedding.append(AdapterLayer(emb_dims[0], 0, 0.0))
 
         word_embedding = nn.Sequential(*word_embedding)
-
         emb_params = zip(vocab_sizes[1:], emb_dims[1:], pad_indices[1:])
         embeddings = [word_embedding] + [
             nn.Embedding(vocab, dim, padding_idx=pad, sparse=sparse)

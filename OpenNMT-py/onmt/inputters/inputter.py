@@ -558,7 +558,7 @@ def _build_field_vocab(
             unk_count = 0
             word2emb = {}
             special_set = set(specials)
-            print(len(counter))
+            print("Counter :",len(counter))
 
             for tok, tokemb in zip(all_specials, all_specials_emb):
                 word2emb[tok] = tokemb
@@ -1198,7 +1198,7 @@ def build_dataset_iter(corpus_type, fields, opt, is_train=True, multi=False):
     dataset_paths = list(sorted(glob.glob(opt.data + "." + corpus_type + ".[0-9]*.pt")))
     if not dataset_paths:
         if is_train:
-            raise ValueError("Training data %s not found" % opt.data)
+            raise ValueError("data at %s not found" % opt.data)
         else:
             return None
     if multi:

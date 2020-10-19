@@ -59,10 +59,10 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
     ), "Number of accum_count values must match number of accum_steps"
     # Load checkpoint if we resume from a previous training.
     assert (
-        not opt.finetune or opt.initialize_with
+        opt.finetune is None or opt.initialize_with is not None
     ), "Cannot finetune if the no trained model is provided"
     assert (
-        opt.pretrain_decoder and opt.initialize_with
+        not opt.pretrain_decoder or opt.initialize_with is None
     ), "Pretrain needs to be from scratch, not of an already trained model"
     if opt.train_from:
         logger.info("Loading checkpoint from %s" % opt.train_from)
@@ -86,9 +86,9 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
             vocab = checkpoint["vocab"]
 
     elif opt.initialize_with:
-        logger.info("Loading checkpoint from %s" % opt.train_from)
+        logger.info("Loading checkpoint from %s" % opt.initialize_with)
         checkpoint = torch.load(
-            opt.train_from, map_location=lambda storage, loc: storage
+            opt.initialize_with, map_location=lambda storage, loc: storage
         )
         model_opt = ArgumentParser.ckpt_model_opts(checkpoint["opt"])
 
@@ -98,12 +98,11 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
         model_opt.tie_embedding_adapters = opt.tie_embedding_adapters
         model_opt.train_only_adapters = opt.train_only_adapters
         model_opt.new_positional_embeddings = opt.new_positional_embeddings
+        model_opt.finetune = opt.finetune
 
-        new_vocab = torch.load(opt.data + ".vocab.pt")
-        vocab = checkpoint["vocab"]
-        print(vocab.keys())
-        input()
-        vocab["tgt"] = new_vocab["tgt"]
+        vocab = torch.load(opt.data + ".vocab.pt")
+        # vocab = checkpoint["vocab"]
+        # vocab["tgt"] = new_vocab["tgt"]
     else:
         checkpoint = None
         model_opt = opt
@@ -129,8 +128,7 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
 
     # Build model.
     model, fields = build_model(model_opt, opt, fields, checkpoint)
-    print(fields.keys())
-    logger.info(model.mtl_generator)
+    # logger.info(model.mtl_generator)
     _check_save_model_path(opt)
 
     # Build optimizer.
@@ -151,7 +149,7 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
     logger.info("encoder: %d" % enc)
     logger.info("decoder: %d" % dec)
     logger.info("non-trainable parameters (tgt_out_emb): %d" % nontrainable)
-    logger.info("* number of parameters: %d" % n_params)
+    logger.info("* number of parameters (in total): %d" % n_params)
 
     # Build model saver
     model_saver = build_model_saver(model_opt, opt, model, fields, optim)
@@ -185,7 +183,7 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
 
         train_iter = _train_iter()
 
-    valid_iter = build_dataset_iter("valid", fields, opt, is_train=False)
+    valid_iter = build_dataset_iter("valid", fields, opt, is_train=opt.train_with == "valid")
 
     if len(opt.gpu_ranks):
         logger.info("Starting training on GPU: %s" % opt.gpu_ranks)
@@ -195,9 +193,14 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
     if opt.single_pass and train_steps > 0:
         logger.warning("Option single_pass is enabled, ignoring train_steps.")
         train_steps = 0
+    
+    if opt.train_with == "valid":
+        train_iter_ = valid_iter
+    else:
+        train_iter_ = train_iter
 
     trainer.train(
-        train_iter,
+        train_iter_,
         train_steps,
         save_checkpoint_steps=opt.save_checkpoint_steps,
         valid_iter=valid_iter,

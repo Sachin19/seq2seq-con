@@ -23,10 +23,12 @@ from onmt.modules import (
 )
 from onmt.modules.util_class import Cast
 from onmt.utils.misc import use_gpu
-from onmt.utils.logging import logger
+# from onmt.utils.logging import logger
 from onmt.utils.parse import ArgumentParser
 
+import logging 
 
+logger = logging.getLogger(__name__)
 def build_embeddings(opt, text_field, for_encoder=True):
     """
     Args:
@@ -77,7 +79,7 @@ def build_embeddings(opt, text_field, for_encoder=True):
         fix_word_vecs=fix_word_vecs,
         tie_embeddings=opt.share_decoder_embeddings and conmt,
         out_vec_size=out_vec_size,
-        adapt_embeddings=opt.adapt_embeddings,
+        adapt_embeddings=opt.adapt_embeddings and not for_encoder,
     )
     return emb
 
@@ -303,6 +305,46 @@ def build_target_embedding(model_opt, field, device):
     # print(tgt_out_emb.parameters())
     return tgt_out_emb, tgt_out_vectors.size(1)
 
+def maybe_load_partial_state_dict(net, state_dict, opt, strict=False):
+    if opt.finetune is None:
+        net.load_state_dict(state_dict, strict=strict)
+    
+    else:
+        own_state = net.state_dict()
+        unupdated_names = []
+        updated_names = []
+        other_names = []
+        for name, param in state_dict.items():
+            if name not in own_state:
+                other_names.append(name)
+                continue
+            
+            if "decoder" in name and "emb_luts" in name:
+                other_names.append(name)
+                continue
+            
+            if "decoder" in name and "pe" in name and opt.new_positional_embeddings:
+                other_names.append(name)
+                continue
+            
+            if "decoder" in name and "tgt_out_emb" in name: 
+                other_names.append(name)
+                continue
+
+            if isinstance(param, nn.Parameter):
+                # backwards compatibility for serialized parameters
+                param = param.data
+            updated_names.append(name)
+            own_state[name].copy_(param)
+        
+        logger.info(f"{len(updated_names)} modules were used from the checkpoint")
+        logger.info(f"{len(other_names)} modules weren't used from the checkpoint")
+        updated_names = set(updated_names)
+        for name in own_state.keys():
+            if name not in updated_names:
+                unupdated_names.append(name)
+            
+        logger.info(f"{len(unupdated_names)} modules in the current model not initialized with the checkpoint")
 
 def build_base_model(
     model_opt,
@@ -400,14 +442,17 @@ def build_base_model(
         # end of patch for backward compatibility
 
         # print(list(checkpoint['model'].keys()))
+        
+        maybe_load_partial_state_dict(model, checkpoint['model'], model_opt, strict=False)
+        maybe_load_partial_state_dict(generator, checkpoint['generator'], model_opt, strict=False)
 
-        model.load_state_dict(checkpoint["model"], strict=False)
-        generator.load_state_dict(checkpoint["generator"], strict=False)
+        # model.load_state_dict(checkpoint["model"], strict=False)
+        # generator.load_state_dict(checkpoint["generator"], strict=False)
         # print(checkpoint.keys())
         if (
             "continuous" in model_opt.generator_function
             and "tgt_out_emb" in checkpoint
-            and not opt.finetune
+            and opt.finetune is None
         ):
             tgt_out_emb.load_state_dict(checkpoint["tgt_out_emb"], strict=False)
         # if hasattr(model.decoder, 'tgt_out_emb'):

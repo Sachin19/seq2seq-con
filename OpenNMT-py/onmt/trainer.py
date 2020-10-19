@@ -87,6 +87,7 @@ def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
         beta_map=opt.beta_map,
         predict_map=opt.predict_map,
         emb_map=opt.emb_map,
+        adapter_id=opt.adapter_id,
     )
     return trainer
 
@@ -144,6 +145,7 @@ class Trainer(object):
         predict_map=False,
         emb_map="none",
         beta_map=0.0,
+        adapter_id=-1,
     ):
         # Basic attributes.
         self.model = model
@@ -174,6 +176,8 @@ class Trainer(object):
         self.predict_map = predict_map
         self.emb_map = emb_map
         self.beta_map = beta_map
+
+        self.adapter_id = adapter_id
 
         for i in range(len(self.accum_count_l)):
             assert self.accum_count_l[i] > 0
@@ -421,7 +425,7 @@ class Trainer(object):
                     self.optim.zero_grad()
 
                 outputs, attns = self.model(
-                    src, tgt, src_lengths, bptt=bptt, with_align=self.with_align
+                    src, tgt, src_lengths, bptt=bptt, with_align=self.with_align, adapter_id=self.adapter_id
                 )
                 bptt = True
                 # 3. Compute loss.

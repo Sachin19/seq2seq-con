@@ -3,7 +3,7 @@ from __future__ import absolute_import
 
 import logging
 from logging.handlers import RotatingFileHandler
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
 
 def init_logger(log_file=None, log_file_level=logging.NOTSET):

@@ -84,7 +84,7 @@ def process_one_shard(corpus_params, params):
         sort_key=inputters.str2sortkey[opt.data_type],
         filter_pred=filter_pred,
     )
-    if corpus_type == "train" and existing_fields is None:
+    if corpus_type == "train" and (existing_fields is None or opt.new_tgt_vocab):
         for ex in dataset.examples:
             for name, field in fields.items():
                 if (opt.data_type == "audio") and (name == "src"):

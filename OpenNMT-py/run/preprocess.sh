@@ -1,13 +1,15 @@
-source activate gans
-mkdir -p ../../kumarvon2018-data/wmt16deen/conmt300/
+DATA=../../data/parallel/it-el
+SRC=$1
+TGT=$2
+BPE=32000
+mkdir -p $DATA/onmt
 python -u preprocess.py\
-    -train_src ../../kumarvon2018-data/wmt16deen/train.tok.clean.bpe.100000.de\
-    -train_tgt ../../kumarvon2018-data/wmt16deen/train.tok.clean.filtered.en\
-    -valid_src ../../kumarvon2018-data/wmt16deen/newstest2015.tok.bpe.100000.de\
-    -valid_tgt ../../kumarvon2018-data/wmt16deen/newstest2015.tok.en\
-    -save_data ../../kumarvon2018-data/wmt16deen/conmt300/data\
-    -tgt_emb ../../../data/monolingual/en/corpus.fasttext.oldtok.txt.vec\
-    -src_vocab_size 100000\
-    -tgt_vocab_size 500000\
+    -train_src $DATA/train.tok.true.clean.bpe.$BPE.$SRC\
+    -train_tgt $DATA/train.tok.true.clean.bpe.$BPE.$TGT\
+    -valid_src $DATA/dev.tok.true.bpe.$BPE.$SRC\
+    -valid_tgt $DATA/dev.tok.true.bpe.$BPE.$TGT\
+    -save_data $DATA/onmt/data\
+    -src_vocab_size 32000\
+    -tgt_vocab_size 32000\
     -src_seq_length 100\
-    -tgt_seq_length 100 > logs/prep_wmt16deen_oldtok.out 2>&1 
+    -tgt_seq_length 100 > logs/itel.out 2>&1 

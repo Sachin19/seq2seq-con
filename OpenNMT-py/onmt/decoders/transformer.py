@@ -69,6 +69,8 @@ class TransformerDecoderLayer(nn.Module):
             self.adapter_layers.append(
                 AdapterLayer(d_model, d_adapter, dropout=dropout)
             )
+        
+        self.adapter_layers = nn.ModuleList(self.adapter_layers)
 
     def forward(self, *args, **kwargs):
         """Extend _forward for (possibly) multiple decoder pass:
@@ -179,7 +181,7 @@ class TransformerDecoderLayer(nn.Module):
         output = self.feed_forward(self.drop(mid) + query)
 
         if adapter_id > -1:
-            output = self.adapter_layers[adapter_id]
+            output = self.adapter_layers[adapter_id](output)
 
         return output, attns
 
@@ -259,7 +261,7 @@ class TransformerDecoder(DecoderBase):
                     aan_useffn=aan_useffn,
                     full_context_alignment=full_context_alignment,
                     alignment_heads=alignment_heads,
-                    num_adapters=num_adapters
+                    num_adapters=num_adapters,
                     d_adapter=d_adapter
                 )
                 for i in range(num_layers)

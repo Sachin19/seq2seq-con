@@ -328,6 +328,13 @@ def model_opts(parser):
         help="Size of adapter bottleneck dimension",
     )
     group.add(
+        "--adapter_id",
+        "-adapter_id",
+        type=int,
+        default=0,
+        help="If there are multiple adapters in your model (which one to use) ",
+    )
+    group.add(
         "--adapt_embeddings",
         "-adapt_embeddings",
         action="store_true",
@@ -345,6 +352,13 @@ def model_opts(parser):
         "-new_positional_embeddings",
         action="store_true",
         help="consider new positional embeddings for the new target language",
+    )
+
+    group.add(
+        "--new_tgt_embeddings",
+        "-new_tgt_embeddings",
+        action="store_true",
+        help="dont load tgt embeddings from checkpoint",
     )
 
     group.add(
@@ -975,6 +989,13 @@ def train_opts(parser):
         help='Path prefix to the ".train.pt" and '
         '".valid.pt" file path from preprocess.py',
     )
+    group.add(
+        "--train_with",
+        "-train_with",
+        default="train",
+        choices=['train', 'valid'],
+        help='train the model with train or valid?',
+    )
 
     group.add(
         "--data_ids",
@@ -1113,12 +1134,11 @@ def train_opts(parser):
     )
 
     group.add(
-        "--train_from",
-        "-train_from",
-        default="",
+        "--initialize_with",
+        "-initialize_with",
+        default=None,
         type=str,
-        help="If training from a checkpoint then this is the "
-        "path to the pretrained model's state_dict.",
+        help="Initialize the model parameters with this checkpoint"
     )
     
     group.add(
@@ -1131,16 +1151,16 @@ def train_opts(parser):
     group.add(
         "--finetune",
         "-finetune",
-        default="dont",
+        default=None,
         type=str,
-        choices=["dont", "adapter", "regular"]
+        choices=[None, "adapter", "regular"],
         help="Only valid with train_from",
     )
     
     group.add(
         "--pretrain_decoder",
         "-pretrain_decoder",
-        action="store_true"
+        action="store_true",
         help="Only valid with train_from",
     ) #this is for a baseline where you pretrain decoder first with std, then fine-tune with tgt (using only monolingual data), before starting training the model
 
