@@ -3,7 +3,7 @@ This repository contains the code for the paper
 > [Von Mises-Fisher Loss for Training Sequence to Sequence Models with Continuous Outputs](https://arxiv.org/pdf/1812.04616.pdf) _Sachin Kumar_ and _Yulia Tsvetkov_
 
 
-UPDATE: A new version of this code compatible with Pytorch >= 1.4 and Python >= 3.6 is available in [this](https://github.com/Sachin19/seq2seq-con/tree/onmt-transformers) branch. It will soon be merged with this repository.
+UPDATE: A new version of this code compatible with Pytorch >= 1.4 and Python >= 3.6 is available in [this](https://github.com/Sachin19/seq2seq-con/tree/onmt-transformers) branch. It will soon be merged with master.
 
 
 # Dependencies
