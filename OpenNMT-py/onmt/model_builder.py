@@ -23,20 +23,23 @@ from onmt.modules import (
 )
 from onmt.modules.util_class import Cast
 from onmt.utils.misc import use_gpu
+
 # from onmt.utils.logging import logger
 from onmt.utils.parse import ArgumentParser
 
-import logging 
+import logging
 
 logger = logging.getLogger(__name__)
-def build_embeddings(opt, text_field, for_encoder=True):
+
+
+def build_embeddings(opt, text_field, for_encoder=True, copy_and_init=False):
     """
     Args:
         opt: the option in current environment.
         text_field(TextMultiField): word and feats field.
         for_encoder(bool): build Embeddings for encoder or decoder?
     """
-    emb_dim = opt.src_word_vec_size if for_encoder else opt.tgt_word_vec_size
+    emb_dim = opt.src_word_vec_size if for_encoder and not copy_and_init else opt.tgt_word_vec_size
 
     if opt.model_type == "vec" and for_encoder:
         return VecEmbedding(
@@ -60,7 +63,10 @@ def build_embeddings(opt, text_field, for_encoder=True):
 
     conmt = False
     out_vec_size = None
-    if ("continuous" in opt.generator_function) and not for_encoder:
+    if for_encoder and copy_and_init:
+        out_vec_size = text_field.base_field.vocab.vectors.size(1)
+
+    elif ("continuous" in opt.generator_function) and not for_encoder:
         out_vec_size = text_field.base_field.vocab.vectors.size(1)
         conmt = True
 
@@ -84,7 +90,7 @@ def build_embeddings(opt, text_field, for_encoder=True):
     return emb
 
 
-def build_encoder(opt, embeddings):
+def build_encoder(opt, embeddings, tgt_embeddings=None):
     """
     Various encoder dispatcher function.
     Args:
@@ -96,7 +102,8 @@ def build_encoder(opt, embeddings):
         if opt.model_type == "text" or opt.model_type == "vec"
         else opt.model_type
     )
-    return str2enc[enc_type].from_opt(opt, embeddings)
+    print (str2enc[enc_type])
+    return str2enc[enc_type].from_opt(opt, embeddings, tgt_embeddings)
 
 
 def build_decoder(opt, embeddings):
@@ -260,6 +267,7 @@ def load_test_model(opt, model_path=None):
         opt.gpu,
         base_target_vocab_new,
         opt.replace_new_vocab_everywhere,
+        test=True
     )
     if opt.fp32:
         model.float()
@@ -305,46 +313,219 @@ def build_target_embedding(model_opt, field, device):
     # print(tgt_out_emb.parameters())
     return tgt_out_emb, tgt_out_vectors.size(1)
 
-def maybe_load_partial_state_dict(net, state_dict, opt, strict=False):
-    if opt.finetune is None:
+
+def maybe_load_partial_state_dict(net, state_dict, opt, strict=False, test=False, module="model"):
+    if opt.finetune is None or test:
         net.load_state_dict(state_dict, strict=strict)
-    
-    else:
+
+    elif opt.finetune == "regular":
+
+        #TODO: verify state getting loaded ok: DONE
+        own_state = net.state_dict()
+        unupdated_names = []
+        updated_names = []
+        partial_names = []
+        other_names = []
+        reload_dict = {}
+
+        for name, param in state_dict.items():
+            logger.info(name)
+            if name not in own_state:
+                other_names.append(name) 
+                continue
+            
+            if name == "decoder.embeddings.make_embedding.emb_luts.0.0.weight":
+                if "continuous" in opt.generator_function:
+                    other_names.append(name)
+                    reload_dict[name] = own_state[name]
+                    continue
+
+                elif own_state[name].size(0) != param.size(0):  #expand vocabulary
+                    assert own_state[name].size(0) > param.size(0), "you can't reduce vocab size"
+                    logger.info("Decoder embeddings partially initialized since the vocabulary is being expanded")
+                    own_state[name][:param.size(0)] = param
+                    reload_dict[name] = own_state[name]
+                    logger.info(reload_dict[name].size())
+                    partial_names.append(name)
+                    continue
+            
+            if module == "generator" and name == "0.weight" and "continuous" not in opt.generator_function and own_state[name].size(0) != param.size(0):
+                assert own_state[name].size(0) > param.size(0), f"you can't reduce vocab size: old {param.size()} to current {own_state[name].size()}"
+                logger.info("Decoder output embeddings partially initialized since the vocabulary is being expanded")
+                own_state[name][:param.size(0)] = param
+                reload_dict[name] = own_state[name]
+                logger.info(reload_dict[name].size())
+                partial_names.append(name)
+                continue
+                
+            if module == "generator" and name == "0.bias" and "continuous" not in opt.generator_function and own_state[name].size(0) != param.size(0):
+                assert own_state[name].size(0) > param.size(0), "you can't reduce vocab size"
+                logger.info("Decoder output bias partially initialized since the vocabulary is being expanded")
+                own_state[name][:param.size(0)] = param
+                reload_dict[name] = own_state[name]
+                logger.info(reload_dict[name].size())
+                partial_names.append(name)
+                continue
+
+            if "decoder" in name and "tgt_out_emb" in name:
+                other_names.append(name)
+                reload_dict[name] = own_state[name]
+                continue
+            
+            reload_dict[name] = param
+            updated_names.append(name)
+        
+        net.load_state_dict(reload_dict, strict=True)
+        updated_names = set(updated_names)
+        for name, params in own_state.items():
+            if name not in updated_names:
+                if "adapter" not in name:
+                    print(name)
+                params.data.normal_(0.0, 0.02)
+                unupdated_names.append(name)
+
+
+        logger.info(f"{len(updated_names)} modules were used from the checkpoint")
+        logger.info(
+            f"{len(partial_names)} modules in the current model were partially initialized with the checkpoint (vocabulary expansion)"
+        )
+        logger.info(
+            f"{len(other_names)} modules weren't used from the checkpoint"
+        )
+        logger.info(
+            f"{len(unupdated_names)} modules in the current model not initialized with the checkpoint"
+        )
+    elif "copy" in opt.finetune:  #copy-regular or copy-adapter
         own_state = net.state_dict()
         unupdated_names = []
         updated_names = []
         other_names = []
+        reload_dict = {}
+        
         for name, param in state_dict.items():
+            #special case
+            if opt.adapt_embeddings and name == "decoder.embeddings.make_embedding.emb_luts.0.1.weight":
+                #input("adapting embeddings hihi")
+                reload_dict[name.replace("0.1", "0.2")] = state_dict[name]
+                updated_names.append(name.replace("0.1", "0.2"))
+                continue
+                
             if name not in own_state:
-                other_names.append(name)
+                other_names.append(name) 
                 continue
             
-            if "decoder" in name and "emb_luts" in name:
+            if name == "decoder.embeddings.make_embedding.emb_luts.0.0.weight" and "continuous" in opt.generator_function:
+                input("adasdasf")
                 other_names.append(name)
-                continue
-            
-            if "decoder" in name and "pe" in name and opt.new_positional_embeddings:
-                other_names.append(name)
-                continue
-            
-            if "decoder" in name and "tgt_out_emb" in name: 
-                other_names.append(name)
+                reload_dict[name] = own_state[name]
                 continue
 
-            if isinstance(param, nn.Parameter):
-                # backwards compatibility for serialized parameters
-                param = param.data
-            updated_names.append(name)
-            own_state[name].copy_(param)
-        
-        logger.info(f"{len(updated_names)} modules were used from the checkpoint")
-        logger.info(f"{len(other_names)} modules weren't used from the checkpoint")
-        updated_names = set(updated_names)
-        for name in own_state.keys():
-            if name not in updated_names:
-                unupdated_names.append(name)
+            # if opt.new_positional_embeddings and "decoder.embeddings.make_embedding.pe" in name:
+            #     input("yass")
+            #     other_names.append(name)
+            #     reload_dict[name] = own_state[name]
+            #     continue
+
+            if "decoder" in name and "tgt_out_emb" in name:
+                other_names.append(name)
+                reload_dict[name] = own_state[name]
+                continue
             
-        logger.info(f"{len(unupdated_names)} modules in the current model not initialized with the checkpoint")
+            reload_dict[name] = param
+            updated_names.append(name)
+        
+        for name, param in own_state.items():
+            if name not in reload_dict:
+                param.data.normal_(0.0, 0.02) #may be something else?
+                reload_dict[name] = param        
+        
+        net.load_state_dict(reload_dict, strict=True)
+        updated_names = set(updated_names)
+
+        logger.info("The following params are being randomly initialized")
+        for name in own_state:
+            if name not in updated_names:
+                logger.info(name)
+                unupdated_names.append(name)
+        logger.info(
+            f"This totals to {len(unupdated_names)} modules"
+        )
+
+        logger.info("Following models are not being initialized from the checkpoint")
+        for name in other_names:
+            logger.info(name)
+        logger.info(
+            f"This totals to {len(other_names)} modules"
+        )  
+
+        logger.info(f"Finally, {len(updated_names)} modules were used from the checkpoint")
+    else:
+        #TODO: verify state getting loaded ok
+        own_state = net.state_dict()
+        unupdated_names = []
+        updated_names = []
+        other_names = []
+        reload_dict = {}
+        
+        for name, param in state_dict.items():
+            
+            #special case
+            if opt.adapt_embeddings and name == "decoder.embeddings.make_embedding.emb_luts.0.1.weight":
+                #input("adapting embeddings hihi")
+                reload_dict[name.replace("0.1", "0.2")] = state_dict[name]
+                updated_names.append(name.replace("0.1", "0.2"))
+                continue
+
+            if name not in own_state:
+                other_names.append(name) 
+                continue
+            
+            if name == "decoder.embeddings.make_embedding.emb_luts.0.0.weight" and "continuous" in opt.generator_function:
+                # input("adasdasf")
+                other_names.append(name)
+                reload_dict[name] = own_state[name]
+                continue
+                
+            # if opt.new_positional_embeddings and "decoder.embeddings.make_embedding.pe" in name:
+            #     input("yass")
+            #     other_names.append(name)
+            #     reload_dict[name] = own_state[name]
+            #     continue
+
+            if "decoder" in name and "tgt_out_emb" in name:
+                other_names.append(name)
+                reload_dict[name] = own_state[name]
+                continue
+            
+            reload_dict[name] = param
+            updated_names.append(name)
+        
+        for name, param in own_state.items():
+            if name not in reload_dict:
+                param.data.normal_(0.0, 0.02) #may be something else?
+                reload_dict[name] = param        
+        
+        net.load_state_dict(reload_dict, strict=True)
+        updated_names = set(updated_names)
+
+        logger.info("The following params are being randomly initialized")
+        for name in own_state:
+            if name not in updated_names:
+                logger.info(name)
+                unupdated_names.append(name)
+        logger.info(
+            f"This totals to {len(unupdated_names)} modules"
+        )
+
+        logger.info("Following models are not being initialized from the checkpoint")
+        for name in other_names:
+            logger.info(name)
+        logger.info(
+            f"This totals to {len(other_names)} modules"
+        )  
+
+        logger.info(f"Finally, {len(updated_names)} modules were used from the checkpoint")
+
 
 def build_base_model(
     model_opt,
@@ -354,6 +535,7 @@ def build_base_model(
     gpu_id=None,
     new_tgt_vocab=None,
     replace_new_vocab_everywhere=False,
+    test=False
 ):
     """Build a model from opts.
 
@@ -384,18 +566,23 @@ def build_base_model(
     except AttributeError:
         model_opt.attention_dropout = model_opt.dropout
 
+    tgt_field = fields["tgt"]
     # Build embeddings.
     if model_opt.model_type == "text" or model_opt.model_type == "vec":
         src_field = fields["src"]
         src_emb = build_embeddings(model_opt, src_field)
+        encoder_tgt_emb=None
+        if model_opt.finetune is not None and "copy" in model_opt.finetune:
+            encoder_tgt_emb = build_embeddings(model_opt, tgt_field) # another embedding table for copy stuff
+
     else:
         src_emb = None
 
     # Build encoder.
-    encoder = build_encoder(model_opt, src_emb)
+    encoder = build_encoder(model_opt, src_emb, tgt_embeddings=encoder_tgt_emb)
 
     # Build decoder.
-    tgt_field = fields["tgt"]
+    
     tgt_emb = build_embeddings(model_opt, tgt_field, for_encoder=False)
 
     # Share the embedding matrix - preprocess with share_vocab required.
@@ -442,9 +629,14 @@ def build_base_model(
         # end of patch for backward compatibility
 
         # print(list(checkpoint['model'].keys()))
-        
-        maybe_load_partial_state_dict(model, checkpoint['model'], model_opt, strict=False)
-        maybe_load_partial_state_dict(generator, checkpoint['generator'], model_opt, strict=False)
+
+        maybe_load_partial_state_dict(
+            model, checkpoint["model"], model_opt, strict=False, test=test
+        )
+        logger.info(checkpoint["generator"].keys())
+        maybe_load_partial_state_dict(
+            generator, checkpoint["generator"], model_opt, strict=False, test=test, module="generator"
+        )
 
         # model.load_state_dict(checkpoint["model"], strict=False)
         # generator.load_state_dict(checkpoint["generator"], strict=False)
@@ -452,7 +644,7 @@ def build_base_model(
         if (
             "continuous" in model_opt.generator_function
             and "tgt_out_emb" in checkpoint
-            and opt.finetune is None
+            and model_opt.finetune is None
         ):
             tgt_out_emb.load_state_dict(checkpoint["tgt_out_emb"], strict=False)
         # if hasattr(model.decoder, 'tgt_out_emb'):
@@ -514,6 +706,10 @@ def build_base_model(
             model.decoder.new_tgt_out_emb = None
 
         model.decoder.tgt_out_emb = tgt_out_emb
+
+        if model_opt.finetune is not None and "copy_tgt_pretrained" in model_opt.finetune:  #initialize encoder tgt input embedding with out decoder tgt input embedding
+            model.encoder.tgt_embeddings = tgt_out_emb
+             
         if model_opt.share_decoder_embeddings:
             model.decoder.embeddings.tie_embeddings(tgt_out_emb[0].weight)
 

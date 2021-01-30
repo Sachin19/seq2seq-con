@@ -427,7 +427,7 @@ def _build_field_vocab_new_tgt(
             for tok, tokemb in zip(all_specials, all_specials_emb):
                 word2emb[tok] = tokemb
 
-            for l in f:
+            for lid, l in enumerate(f):
                 items = l.strip().split()
                 if len(items) < emb_dim + 1:
                     continue
@@ -435,7 +435,10 @@ def _build_field_vocab_new_tgt(
                     v = np.array(items[1:], dtype=np.float32)
                     v = v / (np.linalg.norm(v) + eps)  # normalize
                 except Exception as e:
-                    print(items)
+                    print(lid)
+                    print(l)
+                    # print(items)
+                    input()
                     continue
 
                 if items[0] in counter or items[0] in special_set:
@@ -562,8 +565,9 @@ def _build_field_vocab(
 
             for tok, tokemb in zip(all_specials, all_specials_emb):
                 word2emb[tok] = tokemb
-
-            for l in f:
+            
+            con = 0
+            for lid, l in enumerate(f):
                 items = l.strip().split()
                 if len(items) < emb_dim + 1:
                     continue
@@ -571,8 +575,12 @@ def _build_field_vocab(
                     v = np.array(items[1:], dtype=np.float32)
                     v = v / (np.linalg.norm(v) + eps)  # normalize
                 except Exception as e:
-                    print(items)
-                    continue
+                    print(lid)
+                    con += 1
+                    # print(l)
+                    # print(items)
+                    # input()
+                    # continue
 
                 if items[0] in counter or items[0] in special_set:
                     new_counter[items[0]] = counter[items[0]]
@@ -581,6 +589,8 @@ def _build_field_vocab(
                     word2emb[field.unk_token] += v
                     unk_count += 1
                 n += 1
+            
+            print(f"Faulty embeddings in {con} places")
         field.vocab = field.vocab_cls(new_counter, specials=specials, **kwargs)
         print(len(new_counter))
         word_vectors = []
@@ -1099,6 +1109,7 @@ class DatasetLazyIter(object):
         repeat=True,
         num_batches_multiple=1,
         yield_raw_example=False,
+        log=True
     ):
         self._paths = dataset_paths
         self.fields = fields
@@ -1111,11 +1122,14 @@ class DatasetLazyIter(object):
         self.num_batches_multiple = num_batches_multiple
         self.yield_raw_example = yield_raw_example
         self.pool_factor = pool_factor
+        self.log=log
 
     def _iter_dataset(self, path):
-        logger.info("Loading dataset from %s" % path)
         cur_dataset = torch.load(path)
-        logger.info("number of examples: %d" % len(cur_dataset))
+        if self.log:
+            logger.info("Loading dataset from %s" % path)
+            logger.info("number of examples: %d" % len(cur_dataset))
+            self.log=False
         cur_dataset.fields = self.fields
         cur_iter = OrderedIterator(
             dataset=cur_dataset,
@@ -1225,6 +1239,7 @@ def build_dataset_iter(corpus_type, fields, opt, is_train=True, multi=False):
         num_batches_multiple=max(opt.accum_count) * opt.world_size,
         yield_raw_example=multi,
     )
+    logger.info("iterator building completed")
 
 
 def build_dataset_iter_multiple(train_shards, fields, opt):

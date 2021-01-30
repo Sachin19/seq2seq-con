@@ -84,7 +84,7 @@ def process_one_shard(corpus_params, params):
         sort_key=inputters.str2sortkey[opt.data_type],
         filter_pred=filter_pred,
     )
-    if corpus_type == "train" and (existing_fields is None or opt.new_tgt_vocab):
+    if corpus_type == "train" and (existing_fields is None or opt.new_tgt_vocab or opt.expand_vocab):
         for ex in dataset.examples:
             for name, field in fields.items():
                 if (opt.data_type == "audio") and (name == "src"):
@@ -250,9 +250,7 @@ def build_save_dataset(corpus_type, fields, src_reader, tgt_reader, align_reader
 
     if corpus_type == "train":
         vocab_path = opt.save_data + ".vocab.pt"
-        if existing_fields is None or (
-            existing_fields is not None and opt.new_tgt_vocab
-        ):
+        if existing_fields is None or existing_fields is not None and (opt.new_tgt_vocab or opt.expand_vocab):
             emb_files = [None for _, _ in fields["tgt"]]
             emb_files[0] = opt.tgt_emb
             logger.info(emb_files)
@@ -270,11 +268,20 @@ def build_save_dataset(corpus_type, fields, src_reader, tgt_reader, align_reader
                 feat_vocab_counters=feat_vocab_counters,
             )
             if existing_fields is not None:
-                fields = existing_fields
-                fields["tgt"] = new_fields["tgt"]
+                if opt.new_tgt_vocab:
+                    fields = existing_fields
+                    fields["tgt"] = new_fields["tgt"]
+                else:  #opt.expand_vocab is true
+                    fields = existing_fields
+                    old_size = len(fields["tgt"].base_field.vocab.itos)
+                    fields["tgt"].base_field.vocab.extend(new_fields["tgt"].base_field.vocab)
+                    new_size = len(fields["tgt"].base_field.vocab.itos)
+                    logger.info(f"Expanded the tgt vocabulary to have {new_size-old_size} more types than current {old_size}")
+                    logger.info(f"source vocab size: {len(fields['src'].base_field.vocab.itos)}")
             else:
                 fields = new_fields
         else:
+            print("used old fields, didn't create new ones")
             fields = existing_fields
         torch.save(fields, vocab_path)
 

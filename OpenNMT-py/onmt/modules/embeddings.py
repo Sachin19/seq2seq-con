@@ -180,7 +180,7 @@ class Embeddings(nn.Module):
         # is for words. Subsequent ones are for features, if any exist.
         self.adapt_embeddings = adapt_embeddings
         word_embedding = []
-        if tie_embeddings:
+        if out_vec_size is not None and (out_vec_size != emb_dims[0] or self.tie_embeddings):
             word_embedding.append(
                 nn.Embedding(
                     vocab_sizes[0],

@@ -17,7 +17,17 @@ class NMTModel(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
 
-    def forward(self, src , tgt, lengths, bptt=False, with_align=False, adapter_id=-1, tgt_only=False):
+    def forward(
+        self,
+        src,
+        tgt,
+        lengths,
+        bptt=False,
+        with_align=False,
+        adapter_id=-1,
+        tgt_only=False,
+        copy_finetune=False,
+    ):
         """Forward propagate a `src` and `tgt` pair for training.
         Possible initialized with a beginning decoder state.
 
@@ -33,6 +43,8 @@ class NMTModel(nn.Module):
                 If reset then init_state
             with_align (Boolean): A flag indicating whether output alignment,
                 Only valid for transformer decoder.
+            adapter_id: which adapter to use (if any), only required if there are >=1 adapter layers in your model
+            tgt_out: if only using tgt data (no source text)
 
         Returns:
             (FloatTensor, dict[str, FloatTensor]):
@@ -43,9 +55,12 @@ class NMTModel(nn.Module):
         dec_in = tgt[:-1]  # exclude last target from inputs
 
         if tgt_only:
-            pass
+            src = None
+            memory_bank = None
+            lengths = None
+            enc_state = None
         else:
-            enc_state, memory_bank, lengths = self.encoder(src, lengths)
+            enc_state, memory_bank, lengths = self.encoder(src, lengths, tgt_embed=copy_finetune)
 
         if bptt is False:
             self.decoder.init_state(src, memory_bank, enc_state)

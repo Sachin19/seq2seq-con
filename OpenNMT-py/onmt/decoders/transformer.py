@@ -69,7 +69,7 @@ class TransformerDecoderLayer(nn.Module):
             self.adapter_layers.append(
                 AdapterLayer(d_model, d_adapter, dropout=dropout)
             )
-        
+
         self.adapter_layers = nn.ModuleList(self.adapter_layers)
 
     def forward(self, *args, **kwargs):
@@ -91,20 +91,25 @@ class TransformerDecoderLayer(nn.Module):
         """
         with_align = kwargs.pop("with_align", False)
         output, attns = self._forward(*args, **kwargs)
-        top_attn = attns[:, 0, :, :].contiguous()
-        attn_align = None
-        if with_align:
-            if self.full_context_alignment:
-                # return _, (B, Q_len, K_len)
-                _, attns = self._forward(*args, **kwargs, future=True)
+        if attns is not None:
+            top_attn = attns[:, 0, :, :].contiguous()
+            attn_align = None
+            if with_align:
+                if self.full_context_alignment:
+                    # return _, (B, Q_len, K_len)
+                    _, attns = self._forward(*args, **kwargs, future=True)
 
-            if self.alignment_heads is not None:
-                attns = attns[:, : self.alignment_heads, :, :].contiguous()
-            # layer average attention across heads, get ``(B, Q, K)``
-            # Case 1: no full_context, no align heads -> layer avg baseline
-            # Case 2: no full_context, 1 align heads -> guided align
-            # Case 3: full_context, 1 align heads -> full cte guided align
-            attn_align = attns.mean(dim=1)
+                if self.alignment_heads is not None:
+                    attns = attns[:, : self.alignment_heads, :, :].contiguous()
+                # layer average attention across heads, get ``(B, Q, K)``
+                # Case 1: no full_context, no align heads -> layer avg baseline
+                # Case 2: no full_context, 1 align heads -> guided align
+                # Case 3: full_context, 1 align heads -> full cte guided align
+                attn_align = attns.mean(dim=1)
+        else:
+            top_attn = None
+            attn_align = None
+
         return output, top_attn, attn_align
 
     def _forward(
@@ -168,17 +173,21 @@ class TransformerDecoderLayer(nn.Module):
             )
 
         query = self.drop(query) + inputs
-
         query_norm = self.layer_norm_2(query)
-        mid, attns = self.context_attn(
-            memory_bank,
-            memory_bank,
-            query_norm,
-            mask=src_pad_mask,
-            layer_cache=layer_cache,
-            attn_type="context",
-        )
-        output = self.feed_forward(self.drop(mid) + query)
+
+        if memory_bank is not None:
+            mid, attns = self.context_attn(
+                memory_bank,
+                memory_bank,
+                query_norm,
+                mask=src_pad_mask,
+                layer_cache=layer_cache,
+                attn_type="context",
+            )
+            output = self.feed_forward(self.drop(mid) + query)
+        else:  # used when no src data is available, only finetuning with monolingual data
+            attns = None
+            output = self.feed_forward(query)
 
         if adapter_id > -1:
             output = self.adapter_layers[adapter_id](output)
@@ -262,7 +271,7 @@ class TransformerDecoder(DecoderBase):
                     full_context_alignment=full_context_alignment,
                     alignment_heads=alignment_heads,
                     num_adapters=num_adapters,
-                    d_adapter=d_adapter
+                    d_adapter=d_adapter,
                 )
                 for i in range(num_layers)
             ]
@@ -297,7 +306,7 @@ class TransformerDecoder(DecoderBase):
             opt.alignment_layer,
             alignment_heads=opt.alignment_heads,
             num_adapters=opt.num_adapters,
-            d_adapter=opt.adapter_dim
+            d_adapter=opt.adapter_dim,
         )
 
     def init_state(self, src, memory_bank, enc_hidden):
@@ -319,7 +328,8 @@ class TransformerDecoder(DecoderBase):
             _recursive_map(self.state["cache"])
 
     def detach_state(self):
-        self.state["src"] = self.state["src"].detach()
+        if self.state["src"] is not None:
+            self.state["src"] = self.state["src"].detach()
 
     def forward(self, tgt, memory_bank, step=None, **kwargs):
         """Decode, possibly stepwise."""
@@ -332,18 +342,25 @@ class TransformerDecoder(DecoderBase):
         assert emb.dim() == 3  # len x batch x embedding_dim
 
         output = emb.transpose(0, 1).contiguous()
-        src_memory_bank = memory_bank.transpose(0, 1).contiguous()
 
         pad_idx = self.embeddings.word_padding_idx
-        src_lens = kwargs["memory_lengths"]
-        src_max_len = self.state["src"].shape[0]
-        src_pad_mask = ~sequence_mask(src_lens, src_max_len).unsqueeze(1)
+        if memory_bank is not None:
+            src_memory_bank = memory_bank.transpose(0, 1).contiguous()
+            src_lens = kwargs["memory_lengths"]
+            src_max_len = self.state["src"].shape[0]
+            src_pad_mask = ~sequence_mask(src_lens, src_max_len).unsqueeze(1)
+        else:
+            src_memory_bank = None
+            src_lens = None
+            src_max_len = None
+            src_pad_mask = None
+
         tgt_pad_mask = tgt_words.data.eq(pad_idx).unsqueeze(1)  # [B, 1, T_tgt]
 
         with_align = kwargs.pop("with_align", False)
         attn_aligns = []
-        
-        adapter_id = kwargs.pop("adapter_id", -1)  #which adapter to use
+
+        adapter_id = kwargs.pop("adapter_id", -1)  # which adapter to use
 
         for i, layer in enumerate(self.transformer_layers):
             layer_cache = (
@@ -357,23 +374,26 @@ class TransformerDecoder(DecoderBase):
                 layer_cache=layer_cache,
                 step=step,
                 with_align=with_align,
-                adapter_id=adapter_id
+                adapter_id=adapter_id,
             )
             if attn_align is not None:
                 attn_aligns.append(attn_align)
 
         output = self.layer_norm(output)
         dec_outs = output.transpose(0, 1).contiguous()
-        attn = attn.transpose(0, 1).contiguous()
+        if attn is not None:
+            attn = attn.transpose(0, 1).contiguous()
 
-        attns = {"std": attn}
-        if self._copy:
-            attns["copy"] = attn
-        if with_align:
-            attns["align"] = attn_aligns[self.alignment_layer]  # `(B, Q, K)`
-            # attns["align"] = torch.stack(attn_aligns, 0).mean(0)  # All avg
+            attns = {"std": attn}
+            if self._copy:
+                attns["copy"] = attn
+            if with_align:
+                attns["align"] = attn_aligns[self.alignment_layer]  # `(B, Q, K)`
+                # attns["align"] = torch.stack(attn_aligns, 0).mean(0)  # All avg
 
-        # TODO change the way attns is returned dict => list or tuple (onnx)
+            # TODO change the way attns is returned dict => list or tuple (onnx)
+        else:
+            attns = {}
         return dec_outs, attns
 
     def _init_cache(self, memory_bank):

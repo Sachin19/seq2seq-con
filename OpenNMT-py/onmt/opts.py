@@ -331,9 +331,17 @@ def model_opts(parser):
         "--adapter_id",
         "-adapter_id",
         type=int,
-        default=0,
+        default=-1,
         help="If there are multiple adapters in your model (which one to use) ",
     )
+
+    group.add(
+        "--tgt_only_train",
+        "-tgt_only_train",
+        action="store_true",
+        help="train the decoder on monolingual data only",
+    )
+
     group.add(
         "--adapt_embeddings",
         "-adapt_embeddings",
@@ -346,7 +354,7 @@ def model_opts(parser):
         action="store_true",
         help="",
     )
-    
+
     group.add(
         "--new_positional_embeddings",
         "-new_positional_embeddings",
@@ -825,6 +833,14 @@ def preprocess_opts(parser):
         action="store_true",
         help="create a new target vocabulary (ignore the one in vocab.pt)",
     )
+
+    group.add(
+        "--expand_vocab",
+        "-expand_vocab",
+        action="store_true",
+        help="requires vocab.pt file to be passed, expands the final vocab with more tokens from the corpus",
+    )
+
     group.add(
         "--features_vocabs_prefix",
         "-features_vocabs_prefix",
@@ -993,8 +1009,8 @@ def train_opts(parser):
         "--train_with",
         "-train_with",
         default="train",
-        choices=['train', 'valid'],
-        help='train the model with train or valid?',
+        choices=["train", "valid"],
+        help="train the model with train or valid?",
     )
 
     group.add(
@@ -1138,9 +1154,9 @@ def train_opts(parser):
         "-initialize_with",
         default=None,
         type=str,
-        help="Initialize the model parameters with this checkpoint"
+        help="Initialize the model parameters with this checkpoint",
     )
-    
+
     group.add(
         "--modify_opts",
         "-modify_opts",
@@ -1156,14 +1172,13 @@ def train_opts(parser):
         choices=[None, "adapter", "regular"],
         help="Only valid with train_from",
     )
-    
+
     group.add(
         "--pretrain_decoder",
         "-pretrain_decoder",
         action="store_true",
         help="Only valid with train_from",
-    ) #this is for a baseline where you pretrain decoder first with std, then fine-tune with tgt (using only monolingual data), before starting training the model
-
+    )  # this is for a baseline where you pretrain decoder first with std, then fine-tune with tgt (using only monolingual data), before starting training the model
 
     group.add(
         "--reset_optim",

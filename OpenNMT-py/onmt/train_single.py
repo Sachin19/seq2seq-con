@@ -99,10 +99,13 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
         model_opt.train_only_adapters = opt.train_only_adapters
         model_opt.new_positional_embeddings = opt.new_positional_embeddings
         model_opt.finetune = opt.finetune
+        model_opt.valid_batch_size = opt.valid_batch_size
 
-        vocab = torch.load(opt.data + ".vocab.pt")
-        # vocab = checkpoint["vocab"]
-        # vocab["tgt"] = new_vocab["tgt"]
+        new_vocab = torch.load(opt.data + ".vocab.pt")
+
+        vocab = checkpoint["vocab"]
+        vocab["tgt"] = new_vocab["tgt"]
+        # vocab = new_vocab
     else:
         checkpoint = None
         model_opt = opt
@@ -158,19 +161,24 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
         opt, device_id, model, fields, optim, model_saver=model_saver
     )
 
+    if opt.train_with == "valid":
+        logger.info("Training with validation data")
+        shard_base = "valid"
+    else:
+        shard_base = "train"
+        logger.info("Training with train data")
+
     if batch_queue is None:
         if len(opt.data_ids) > 1:
             train_shards = []
             for train_id in opt.data_ids:
-                shard_base = "train_" + train_id
+                shard_base = shard_base+"_" + train_id
                 train_shards.append(shard_base)
             train_iter = build_dataset_iter_multiple(train_shards, fields, opt)
         else:
             if opt.data_ids[0] is not None:
-                shard_base = "train_" + opt.data_ids[0]
-            else:
-                shard_base = "train"
-            train_iter = build_dataset_iter(shard_base, fields, opt)
+                shard_base = shard_base + "_" + opt.data_ids[0]
+            train_iter = build_dataset_iter(shard_base, fields, opt, is_train=True)
 
     else:
         assert semaphore is not None, "Using batch_queue requires semaphore as well"
@@ -183,7 +191,9 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
 
         train_iter = _train_iter()
 
-    valid_iter = build_dataset_iter("valid", fields, opt, is_train=opt.train_with == "valid")
+    valid_iter = build_dataset_iter(
+      "valid", fields, opt, is_train=False,
+    )
 
     if len(opt.gpu_ranks):
         logger.info("Starting training on GPU: %s" % opt.gpu_ranks)
@@ -193,14 +203,11 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
     if opt.single_pass and train_steps > 0:
         logger.warning("Option single_pass is enabled, ignoring train_steps.")
         train_steps = 0
+
     
-    if opt.train_with == "valid":
-        train_iter_ = valid_iter
-    else:
-        train_iter_ = train_iter
 
     trainer.train(
-        train_iter_,
+        train_iter,
         train_steps,
         save_checkpoint_steps=opt.save_checkpoint_steps,
         valid_iter=valid_iter,

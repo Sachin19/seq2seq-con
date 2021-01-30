@@ -88,6 +88,8 @@ def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
         predict_map=opt.predict_map,
         emb_map=opt.emb_map,
         adapter_id=opt.adapter_id,
+        tgt_only_train=opt.tgt_only_train,
+        copy_finetune=opt.finetune is not None and "copy" in opt.finetune
     )
     return trainer
 
@@ -146,6 +148,8 @@ class Trainer(object):
         emb_map="none",
         beta_map=0.0,
         adapter_id=-1,
+        tgt_only_train=False,
+        copy_finetune=False
     ):
         # Basic attributes.
         self.model = model
@@ -178,6 +182,8 @@ class Trainer(object):
         self.beta_map = beta_map
 
         self.adapter_id = adapter_id
+        self.tgt_only_train = tgt_only_train
+        self.copy_finetune = copy_finetune
 
         for i in range(len(self.accum_count_l)):
             assert self.accum_count_l[i] > 0
@@ -301,13 +307,14 @@ class Trainer(object):
             report_stats = self._maybe_report_training(
                 step, train_steps, self.optim.learning_rate(), report_stats
             )
-
             if valid_iter is not None and step % valid_steps == 0:
+                logger.info("Validating")
                 if self.gpu_verbose_level > 0:
                     logger.info("GpuRank %d: validate step %d" % (self.gpu_rank, step))
                 valid_stats = self.validate(
                     valid_iter, moving_average=self.moving_average
                 )
+                # logger.info("done validating")
                 if self.gpu_verbose_level > 0:
                     logger.info(
                         "GpuRank %d: gather valid stat \
@@ -315,6 +322,7 @@ class Trainer(object):
                         % (self.gpu_rank, step)
                     )
                 valid_stats = self._maybe_gather_stats(valid_stats)
+                # logger.info(valid_stats)
                 if self.gpu_verbose_level > 0:
                     logger.info(
                         "GpuRank %d: report stat step %d" % (self.gpu_rank, step)
@@ -335,6 +343,9 @@ class Trainer(object):
                 self.model_saver.save(step, moving_average=self.moving_average)
 
             if train_steps > 0 and step >= train_steps:
+                logger.info("Stopping time has arrived")
+                logger.info(train_steps)
+                logger.info(step)
                 break
 
         if self.model_saver is not None:
@@ -360,10 +371,11 @@ class Trainer(object):
 
         # Set model in validating mode.
         valid_model.eval()
+        # logger.info("here")
 
         with torch.no_grad():
             stats = onmt.utils.Statistics()
-
+            i = 0
             for batch in valid_iter:
                 src, src_lengths = (
                     batch.src if isinstance(batch.src, tuple) else (batch.src, None)
@@ -374,7 +386,7 @@ class Trainer(object):
 
                 # F-prop through the model.
                 outputs, attns = valid_model(
-                    src, tgt, src_lengths, with_align=self.with_align
+                    src, tgt, src_lengths, with_align=self.with_align, tgt_only=False, adapter_id=self.adapter_id, copy_finetune=False
                 )
 
                 # Compute loss.
@@ -425,7 +437,14 @@ class Trainer(object):
                     self.optim.zero_grad()
 
                 outputs, attns = self.model(
-                    src, tgt, src_lengths, bptt=bptt, with_align=self.with_align, adapter_id=self.adapter_id
+                    src,
+                    tgt,
+                    src_lengths,
+                    bptt=bptt,
+                    with_align=self.with_align,
+                    adapter_id=self.adapter_id,
+                    tgt_only=self.tgt_only_train,
+                    copy_finetune=self.copy_finetune
                 )
                 bptt = True
                 # 3. Compute loss.
@@ -442,6 +461,13 @@ class Trainer(object):
 
                     if loss is not None:
                         self.optim.backward(loss)
+                    # total_norm = 0
+                    # for name, p in self.model.named_parameters():
+                    #     if "adapter" in name:
+                    #         param_norm = p.grad.data.norm(2)
+                    #         total_norm += param_norm.item() ** 2    
+                    # total_norm = total_norm ** (1. / 2)
+                    # logger.info(f"grad norm = {total_norm}")
 
                     total_stats.update(batch_stats)
                     report_stats.update(batch_stats)
@@ -535,6 +561,7 @@ class Trainer(object):
         Simple function to report stats (if report_manager is set)
         see `onmt.utils.ReportManagerBase.report_step` for doc
         """
+        # logger.info("reporting")
         if self.report_manager is not None:
             return self.report_manager.report_step(
                 learning_rate, step, train_stats=train_stats, valid_stats=valid_stats
