@@ -741,8 +741,7 @@ class Translator(object):
                     exclusion_tokens=self._exclusion_idxs,
                     stepwise_penalty=self.stepwise_penalty,
                     ratio=self.ratio,
-                    use_feat_emb=self.use_feat_emb,
-                    use_new_target_vocab=self.use_new_target_vocab)
+                    use_feat_emb=self.use_feat_emb)
             return self._translate_batch_with_strategy(batch, src_vocabs,
                                                        decode_strategy)
 

@@ -58,7 +58,7 @@ class BeamSearch(DecodeStrategy):
     def __init__(self, beam_size, batch_size, pad, bos, eos, n_best,
                  global_scorer, min_length, max_length, return_attention,
                  block_ngram_repeat, exclusion_tokens,
-                 stepwise_penalty, ratio, pos_topk=1, multi_task=False, use_feat_emb=False):
+                 stepwise_penalty, ratio, pos_topk=1, multi_task=False, use_feat_emb=False, use_new_target_vocab=False):
         super(BeamSearch, self).__init__(
             pad, bos, eos, batch_size, beam_size, min_length,
             block_ngram_repeat, exclusion_tokens, return_attention,
@@ -153,7 +153,7 @@ class BeamSearch(DecodeStrategy):
     def batch_offset(self):
         return self._batch_offset
 
-    def advance(self, log_probs, attn, pos_log_probs=None):
+    def advance(self, log_probs, new_log_probs, attn, pos_log_probs=None):
         vocab_size = log_probs.size(-1)
 
         # using integer division to get an integer _B without casting
