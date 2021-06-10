@@ -1,9 +1,9 @@
 This repository contains the code for the following two papers
 
-> [Von Mises-Fisher Loss for Training Sequence to Sequence Models with Continuous Outputs](https://arxiv.org/pdf/1812.04616.pdf) _Sachin Kumar_ and _Yulia Tsvetkov_
-> [Machine Translation in Low-resource Language Varieties](#) _Sachin Kumar_, _Antonios Anastasopoulos_, _Shuly Wintner_ and _Yulia Tsvetkov_
+* [Von Mises-Fisher Loss for Training Sequence to Sequence Models with Continuous Outputs](https://arxiv.org/pdf/1812.04616.pdf) _Sachin Kumar_ and _Yulia Tsvetkov_
+* [Machine Translation in Low-resource Language Varieties](#) _Sachin Kumar_, _Antonios Anastasopoulos_, _Shuly Wintner_ and _Yulia Tsvetkov_
 
-If you use this repository for academic research, (please cite the relevant papers)[#Publications]
+If you use this repository for academic research, [please cite the relevant papers](#Publications)
 
 # Dependencies
 
