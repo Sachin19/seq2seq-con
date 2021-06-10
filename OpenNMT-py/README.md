@@ -70,6 +70,14 @@ booktitle={Proc. of ICLR},
 year={2019},
 url={https://arxiv.org/pdf/1812.04616.pdf},
 }
+
+@inproceedings{kumar2021langvar,
+title={Machine Translation into Low-resource Language Varieties},
+author={Sachin Kumar, Antonios Anastasopoulos, Shuly Wintner and Yulia Tsvetkov},
+booktitle={Proc. of ACL},
+year={2021},
+url={},
+}
 ```
 
 ## Acknowledgements
