@@ -38,7 +38,7 @@ python -u preprocess.py\
     -tgt_seq_length 175 
 ```
 
-# Training src to std model
+### Training src to std model
 
 ```
 BASEDIR=/path/to/root/of/this/repository
@@ -129,7 +129,7 @@ cat train.std mono.tgt | /path/to/fastBPE/fast learnbpe 24000 - > std-tgt.bpecod
 4. Using `translate.py` with the backtranslation std to src model, generate psuedo-parallel src-tgt data by translating `mono.tgt.bpetok` to src: `mono.tgt.to-src.bpetok`.
 5. Finally, finetune the src-std model as follows
 
-# Preprocessing
+### Preprocessing
 
 ```
 SRCTGT_DATADIR=/path/to/save/binarized/data
@@ -145,7 +145,7 @@ python -u preprocess.py\
     -tgt_seq_length 175 
 ```
 
-# Finetuning
+### Finetuning
 
 ```
 BASEDIR=/path/to/root/of/this/repository
