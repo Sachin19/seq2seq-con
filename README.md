@@ -1,10 +1,9 @@
-This repository contains the code for the paper
+UPDATE: A new version of this code, implemented on top of transformers and compatible with Pytorch >= 1.6 and Python >= 3.6 is available in [this](https://github.com/Sachin19/seq2seq-con/tree/langvar) branch. It will soon be merged with master.
 
-> [Von Mises-Fisher Loss for Training Sequence to Sequence Models with Continuous Outputs](https://arxiv.org/pdf/1812.04616.pdf) _Sachin Kumar_ and _Yulia Tsvetkov_
+This repository contains the code for the following two papers
 
-
-UPDATE: A new version of this code, implemented on top of transformers and compatible with Pytorch >= 1.4 and Python >= 3.6 is available in [this](https://github.com/Sachin19/seq2seq-con/tree/onmt-transformers) branch. It will soon be merged with master.
-
+* [Von Mises-Fisher Loss for Training Sequence to Sequence Models with Continuous Outputs](https://arxiv.org/pdf/1812.04616.pdf) _Sachin Kumar_ and _Yulia Tsvetkov_
+* [Machine Translation in Low-resource Language Varieties](#) _Sachin Kumar_, _Antonios Anastasopoulos_, _Shuly Wintner_ and _Yulia Tsvetkov_ 
 
 # Dependencies
 
