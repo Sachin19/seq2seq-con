@@ -2,7 +2,7 @@ Here we describe the instructions to reproduce the results of the paper "Machine
 
 ## Step 1: Training a src-std model
 
-# Preprocessing
+### Preprocessing
 
 * We use [fastBPE](https://github.com/glample/fastBPE) to tokenize the source and target text separately without any word tokenization as follows
 
